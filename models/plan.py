@@ -1,7 +1,7 @@
 from enum import Enum
 from typing import List, Optional, Union
 from datetime import datetime
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 # ---------- Enums ----------
 class PlanType(str, Enum):
@@ -21,22 +21,30 @@ class BeaconType(str, Enum):
 
 
 # ---------- Supporting models ----------
+class CoordinateProps(BaseModel):
+    id: str
+    northing: Optional[float] = 0.0
+    easting: Optional[float] = 0.0
+    elevation: Optional[float] = 0.0
+
+class BearingProps(BaseModel):
+    degrees: Optional[int] = 0.0
+    minutes: Optional[int] = 0.0
+    seconds: Optional[float] = 0.0
+    decimal: Optional[float] = 0.0
+
+class TraverseLegProps(BaseModel):
+    from_: CoordinateProps = Field(alias="from")  # 👈 use alias
+    to: CoordinateProps
+    bearing: Optional[BearingProps] = None
+    observed_angle: Optional[BearingProps] = None
+    distance: Optional[float] = None
+
 class ParcelProps(BaseModel):
     name: str
     ids: List[str]
-
-class CoordinateProps(BaseModel):
-    x: float
-    y: float
-    z: Optional[float] = None
-
-class TraverseLegProps(BaseModel):
-    from_: str  # `from` is reserved in Python
-    to: str
-    bearing: Optional[float] = None
-    observed_angle: Optional[float] = None
-    distance: float
-
+    area: Optional[float] = None  # in square meters
+    legs: List[TraverseLegProps] = []
 
 # ---------- Computation models ----------
 class ForwardComputationData(BaseModel):
@@ -76,3 +84,26 @@ class PlanProps(BaseModel):
     surveyor_name: str = ""
     forward_computation_data: Optional[ForwardComputationData] = None
     traverse_computation_data: Optional[TraverseComputationData] = None
+
+    def get_extent(self) -> float:
+        # get bounding box
+        min_x, min_y, max_x, max_y = self.get_bounding_box()
+        if min_x is None or min_y is None or max_x is None or max_y is None:
+            return 0.0
+
+        width = max_x - min_x
+        height = max_y - min_y
+        extent = max(width, height)
+        return extent
+
+    def get_bounding_box(self) -> Optional[tuple]:
+        if len(self.coordinates) == 0:
+            return None
+
+        xs = [p.easting for p in self.coordinates]
+        ys = [p.northing for p in self.coordinates]
+
+        min_x, max_x = min(xs), max(xs)
+        min_y, max_y = min(ys), max(ys)
+
+        return min_x, min_y, max_x, max_y

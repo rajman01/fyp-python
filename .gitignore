@@ -66,3 +66,14 @@ Thumbs.db
 # Environment variables
 .env
 .env.*
+
+# Autocad files
+*.dwg
+*.dxf
+*.bak
+*.sv$
+*.dws
+*.dwt
+*.ac$
+*.dwl
+*.dwl2
