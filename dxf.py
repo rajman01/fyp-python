@@ -1,6 +1,6 @@
 import ezdxf
 import re
-from ezdxf.enums import TextEntityAlignment
+from ezdxf.enums import TextEntityAlignment, MTextParagraphAlignment
 import matplotlib
 matplotlib.use("Agg")  # no GUI
 import matplotlib.pyplot as plt
@@ -125,6 +125,31 @@ class SurveyDXFManager:
                 align=TextEntityAlignment.MIDDLE_CENTER
             )
 
+    def add_text(self, text: str, x: float, y: float, angle: float = 0.0, height: float = 1.0):
+        """Add arbitrary text at given coordinates with optional rotation"""
+        self.msp.add_text(
+            text,
+            dxfattribs={
+                'layer': 'LABELS',
+                'height': height * self.scale,
+                'style': 'SURVEY_TEXT',
+                'rotation': angle
+            }
+        ).set_placement(
+            (x * self.scale, y * self.scale),
+            align=TextEntityAlignment.MIDDLE_CENTER
+        )
+
+    def add_title(self, text: str, x: float, y: float, width: float, height: float = 1.0):
+        print(width)
+        """Add title text at given coordinates with optional rotation"""
+        mtext = self.msp.add_mtext(text, dxfattribs={'layer': 'TITLE_BLOCK', 'style': 'SURVEY_TEXT'})
+        mtext.set_location((x * self.scale, y * self.scale))
+        mtext.dxf.char_height = height * self.scale
+        mtext.dxf.width = 60
+        mtext.dxf.attachment_point = 2  # top center
+        # mtext.dxf.paragraphs = MTextParagraphAlignment.JUSTIFIED
+
     def draw_frame(self, min_x, min_y, max_x, max_y):
         """Draw a rectangle given min and max coordinates"""
         self.msp.add_lwpolyline([
@@ -149,14 +174,15 @@ class SurveyDXFManager:
 
 
     def dxf_to_pdf(self, margin_ratio: float = 0.05):
+        self.save_dxf()
 
-
-        # doc = ezdxf.readfile(dxf_path)
-        # msp = doc.modelspace()
+        dxf_path = f"{self.get_filename()}.dxf"
+        doc = ezdxf.readfile(dxf_path)
+        msp = doc.modelspace()
 
         # compute bounding box
         xs, ys = [], []
-        for e in self.msp:
+        for e in msp:
             if e.dxftype() == "LINE":
                 xs += [e.dxf.start[0], e.dxf.end[0]]
                 ys += [e.dxf.start[1], e.dxf.end[1]]
@@ -178,9 +204,11 @@ class SurveyDXFManager:
         ax.set_ylim(min_y, max_y)
         ax.axis("off")
 
-        ctx = RenderContext(self.doc)
+        ctx = RenderContext(doc)
         out = MatplotlibBackend(ax)
-        Frontend(ctx, out).draw_layout(self.msp, finalize=True)
+        out.set_background("black")
+        # out.set_color_mapper(lambda entity: 'black' if entity.dxf.color == 7 else None)
+        Frontend(ctx, out).draw_layout(msp, finalize=True)
 
         pdf_path = f"{self.get_filename()}.pdf"
         fig.savefig(pdf_path, bbox_inches="tight", pad_inches=0)
