@@ -6,6 +6,7 @@ matplotlib.use("Agg")  # no GUI
 import matplotlib.pyplot as plt
 from ezdxf.addons.drawing import Frontend, RenderContext
 from ezdxf.addons.drawing.matplotlib import MatplotlibBackend
+from ezdxf.tools.text import MTextEditor
 
 class SurveyDXFManager:
     def __init__(self, plan_name: str = "Survey Plan", scale: float = 1.0):
@@ -140,23 +141,23 @@ class SurveyDXFManager:
             align=TextEntityAlignment.MIDDLE_CENTER
         )
 
-    def add_title(self, text: str, x: float, y: float, width: float, height: float = 1.0):
-        print(width)
-        """Add title text at given coordinates with optional rotation"""
-        mtext = self.msp.add_mtext(text, dxfattribs={'layer': 'TITLE_BLOCK', 'style': 'SURVEY_TEXT'})
-        mtext.set_location((x * self.scale, y * self.scale))
-        mtext.dxf.char_height = height * self.scale
-        mtext.dxf.width = 60
-        mtext.dxf.attachment_point = 2  # top center
-        # mtext.dxf.paragraphs = MTextParagraphAlignment.JUSTIFIED
+    def add_title(self, text: str, x: float, y: float, width: float, title_height: float = 1.0):
+        title_mtext = self.msp.add_mtext(
+            text=f"{MTextEditor.UNDERLINE_START}{text}{MTextEditor.UNDERLINE_STOP}",
+            dxfattribs={'layer': 'TITLE_BLOCK', 'style': 'SURVEY_TEXT'},
+        )
+        title_mtext.set_location((x * self.scale, y * self.scale))
+        title_mtext.dxf.attachment_point = ezdxf.enums.MTextEntityAlignment.TOP_CENTER
+        title_mtext.dxf.char_height = title_height * self.scale
+        title_mtext.dxf.width = width * self.scale
 
     def draw_frame(self, min_x, min_y, max_x, max_y):
         """Draw a rectangle given min and max coordinates"""
         self.msp.add_lwpolyline([
-            (min_x * self.scale, min_y* self.scale),
-            (max_x* self.scale, min_y* self.scale),
-            (max_x* self.scale, max_y* self.scale),
-            (min_x* self.scale, max_y* self.scale)
+            (min_x * self.scale, min_y * self.scale),
+            (max_x * self.scale, min_y * self.scale),
+            (max_x * self.scale, max_y * self.scale),
+            (min_x * self.scale, max_y * self.scale)
         ], close=True, dxfattribs={
             'layer': 'FRAME',
         })

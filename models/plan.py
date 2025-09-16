@@ -2,6 +2,7 @@ from enum import Enum
 from typing import List, Optional, Union
 from datetime import datetime
 from pydantic import BaseModel, Field
+from bs4 import BeautifulSoup
 
 # ---------- Enums ----------
 class PlanType(str, Enum):
@@ -78,12 +79,17 @@ class PlanProps(BaseModel):
     state: str = ""
     plan_number: str = ""
     origin: PlanOrigin = PlanOrigin.UTM_ZONE_31
-    scale: float = 1
+    scale: float = 1000
     beacon_type: BeaconType = BeaconType.NONE
     personel_name: str = ""
     surveyor_name: str = ""
     forward_computation_data: Optional[ForwardComputationData] = None
     traverse_computation_data: Optional[TraverseComputationData] = None
+
+    def get_drawing_scale(self):
+        if not self.scale:
+            return 1.0
+        return 1000 / self.scale
 
     def get_extent(self) -> float:
         # get bounding box
@@ -107,3 +113,29 @@ class PlanProps(BaseModel):
         min_y, max_y = min(ys), max(ys)
 
         return min_x, min_y, max_x, max_y
+
+    def build_title(self) -> str:
+        soup = BeautifulSoup(self.title.upper(), "html.parser")
+
+        if self.address:
+            p1 = soup.new_tag("p")
+            p1.string = self.address.upper()
+            soup.append(p1)
+
+        if self.local_govt:
+            p2 = soup.new_tag("p")
+            p2.string = self.local_govt.upper()
+            soup.append(p2)
+
+        if self.state:
+            p3 = soup.new_tag("p")
+            p3.string = f"{self.state.upper()} STATE"
+            soup.append(p3)
+
+        if self.scale:
+            p4 = soup.new_tag("p")
+            p4.string = f"SCALE :- 1 : {int(self.scale)}"
+            soup.append(p4)
+
+        return soup.prettify()
+
