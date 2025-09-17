@@ -121,8 +121,9 @@ def generate_cadastral_plan():
 
     drawer.add_title(html_to_mtext(plan.build_title()), frame_center_x, title_y, title_width, title_height)
 
-
-    drawer.save_dxf()
+    # drawer.save_dxf()
+    # drawer.dxf_to_dwg()
+    drawer.save()
     return jsonify({"message": "Cadastral plan generated", "filename": plan.name}), 200
 
 if __name__ == '__main__':

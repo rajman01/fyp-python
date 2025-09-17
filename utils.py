@@ -32,7 +32,6 @@ def html_to_mtext(html_text: str):
         return ""
 
     html_text = html_text.replace('\n', '')
-    print(html_text)
     soup = BeautifulSoup(html_text, "html.parser")
     editor = MTextEditor()
 
@@ -71,7 +70,3 @@ def html_to_mtext(html_text: str):
     result = str(editor)
     result = result.replace('\n', '')
     return result
-
-
-if __name__ == '__main__':
-    print(repr(html_to_mtext()))

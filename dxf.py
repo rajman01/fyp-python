@@ -1,12 +1,15 @@
 import ezdxf
 import re
-from ezdxf.enums import TextEntityAlignment, MTextParagraphAlignment
-import matplotlib
-matplotlib.use("Agg")  # no GUI
-import matplotlib.pyplot as plt
-from ezdxf.addons.drawing import Frontend, RenderContext
-from ezdxf.addons.drawing.matplotlib import MatplotlibBackend
+from ezdxf.enums import TextEntityAlignment
+from ezdxf.addons.drawing import Frontend, RenderContext, pymupdf, layout, config
 from ezdxf.tools.text import MTextEditor
+from ezdxf.addons import odafc
+import tempfile
+import os
+from datetime import datetime
+import uuid
+import zipfile
+import shutil
 
 class SurveyDXFManager:
     def __init__(self, plan_name: str = "Survey Plan", scale: float = 1.0):
@@ -167,53 +170,57 @@ class SurveyDXFManager:
         plan_name = re.sub(r"\s+", "_",plan_name)
         plan_name = re.sub(r"[^a-z0-9._-]", "", plan_name)
         plan_name = re.sub(r"_+", "_", plan_name)
-        return plan_name
+        return f"{plan_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
 
-    def save_dxf(self):
+    def save_dxf(self, filepath: str = None):
         """Save the DXF document to a file"""
-        self.doc.saveas(f"{self.get_filename()}.dxf")
-
-
-    def dxf_to_pdf(self, margin_ratio: float = 0.05):
-        self.save_dxf()
-
+        if filepath:
+            self.doc.saveas(filepath)
+            return
         dxf_path = f"{self.get_filename()}.dxf"
-        doc = ezdxf.readfile(dxf_path)
-        msp = doc.modelspace()
+        self.doc.saveas(dxf_path)
 
-        # compute bounding box
-        xs, ys = [], []
-        for e in msp:
-            if e.dxftype() == "LINE":
-                xs += [e.dxf.start[0], e.dxf.end[0]]
-                ys += [e.dxf.start[1], e.dxf.end[1]]
-            elif e.dxftype() == "CIRCLE":
-                xs += [e.dxf.center[0] - e.dxf.radius, e.dxf.center[0] + e.dxf.radius]
-                ys += [e.dxf.center[1] - e.dxf.radius, e.dxf.center[1] + e.dxf.radius]
+    def save_pdf(self, filepath: str = None):
+        context = RenderContext(self.doc)
+        backend = pymupdf.PyMuPdfBackend()
+        cfg = config.Configuration(background_policy=config.BackgroundPolicy.WHITE)
+        frontend = Frontend(context, backend, config=cfg)
+        frontend.draw_layout(self.msp)
+        page = layout.Page(210, 297, layout.Units.mm, margins=layout.Margins.all(20))
+        if not filepath:
+            filepath = f"{self.get_filename()}.pdf"
+        pdf_bytes = backend.get_pdf_bytes(page)
+        with open(filepath, "wb") as f:
+            f.write(pdf_bytes)
 
-        if not xs or not ys:
-            xs = [0, 10]; ys = [0, 10]  # fallback box
+    def save_dwg(self, dxf_filepath: str, filepath: str = None):
+        if not filepath:
+            filepath = f"{self.get_filename()}.dwg"
+        odafc.convert(dxf_filepath, filepath)
 
-        min_x, max_x = min(xs), max(xs)
-        min_y, max_y = min(ys), max(ys)
+    def save(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            filename = self.get_filename()
+            dxf_path = os.path.join(tmpdir, f"{filename}.dxf")
+            dwg_path =  os.path.join(tmpdir, f"{filename}.dwg")
+            pdf_path =  os.path.join(tmpdir, f"{filename}.pdf")
+            zip_path = os.path.join(tmpdir, f"{filename}.zip")
 
-        width = max(max_x - min_x, 1)   # avoid zero
-        height = max(max_y - min_y, 1)
+            self.save_dxf(dxf_path)
+            self.save_dwg(dxf_path, dwg_path)
+            self.save_pdf(pdf_path)
 
-        fig, ax = plt.subplots(figsize=(8, 8 * height / width))
-        ax.set_xlim(min_x, max_x)
-        ax.set_ylim(min_y, max_y)
-        ax.axis("off")
+            # Create a ZIP file containing all three formats
+            with zipfile.ZipFile(zip_path, "w") as zipf:
+                zipf.write(dxf_path, os.path.basename(dxf_path))
+                zipf.write(dwg_path, os.path.basename(dwg_path))
+                zipf.write(pdf_path, os.path.basename(pdf_path))
 
-        ctx = RenderContext(doc)
-        out = MatplotlibBackend(ax)
-        out.set_background("black")
-        # out.set_color_mapper(lambda entity: 'black' if entity.dxf.color == 7 else None)
-        Frontend(ctx, out).draw_layout(msp, finalize=True)
 
-        pdf_path = f"{self.get_filename()}.pdf"
-        fig.savefig(pdf_path, bbox_inches="tight", pad_inches=0)
-        plt.close(fig)
+            # Copy DWG to a permanent location
+            shutil.copy(zip_path, f"{filename}.zip")
+
+
 
 
 
