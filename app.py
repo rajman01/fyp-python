@@ -1,3 +1,6 @@
+from dotenv import load_dotenv
+load_dotenv()  # reads .env into environment
+
 import os
 import math
 
@@ -9,6 +12,12 @@ from utils import polygon_orientation, line_normals, line_direction, html_to_mte
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = "secret"
+
+# cloudinary.config(
+#     cloud_name = os.getenv("CLOUDINARY_CLOUD_NAME"),
+#     api_key = os.getenv("CLOUDINARY_API_KEY"),
+#     api_secret = os.getenv("CLOUDINARY_API_SECRET")
+# )
 
 
 @app.get("/")
@@ -123,8 +132,24 @@ def generate_cadastral_plan():
 
     # drawer.save_dxf()
     # drawer.dxf_to_dwg()
-    drawer.save()
-    return jsonify({"message": "Cadastral plan generated", "filename": plan.name}), 200
+    url = drawer.save()
+    return jsonify({"message": "Cadastral plan generated", "filename": plan.name, "url": url}), 200
+
+@app.errorhandler(404)
+def not_found(e):
+    return jsonify({"error": "Resource not found"}), 404
+
+@app.errorhandler(500)
+def internal_error(e):
+    return jsonify({"error": "Something went wrong on our side"}), 500
+
+@app.errorhandler(Exception)
+def handle_exception(e):
+    # You can log the exception here
+    app.logger.error(f"Unhandled Exception: {e}", exc_info=True)
+
+    # Return JSON response instead of crashing
+    return jsonify({"error": "An unexpected error occurred"}), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8080))

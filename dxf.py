@@ -10,6 +10,7 @@ from datetime import datetime
 import uuid
 import zipfile
 import shutil
+from upload import upload_file
 
 class SurveyDXFManager:
     def __init__(self, plan_name: str = "Survey Plan", scale: float = 1.0):
@@ -216,9 +217,10 @@ class SurveyDXFManager:
                 zipf.write(dwg_path, os.path.basename(dwg_path))
                 zipf.write(pdf_path, os.path.basename(pdf_path))
 
-
-            # Copy DWG to a permanent location
-            shutil.copy(zip_path, f"{filename}.zip")
+            url = upload_file(zip_path, folder="survey_plans")
+            if url is None:
+                raise Exception("Upload failed")
+            return url
 
 
 
