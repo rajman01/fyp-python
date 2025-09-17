@@ -8,7 +8,6 @@ def upload_file(file_path, folder="uploads"):
   """
   Uploads a file to Cloudinary and returns the upload response.
   """
-  print(os.getenv("CLOUDINARY_URL"))
   try:
     response = cloudinary.uploader.upload(
       file_path,
