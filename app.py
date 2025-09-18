@@ -1,23 +1,13 @@
+import os
 from dotenv import load_dotenv
 load_dotenv()  # reads .env into environment
 
-import os
-import math
+from cadastral import CadastralPlan
 
 from flask import Flask, request, jsonify
 
-from dxf import SurveyDXFManager
-from models.plan import PlanProps
-from utils import polygon_orientation, line_normals, line_direction, html_to_mtext
-
 app = Flask(__name__)
 app.config["SECRET_KEY"] = "secret"
-
-# cloudinary.config(
-#     cloud_name = os.getenv("CLOUDINARY_CLOUD_NAME"),
-#     api_key = os.getenv("CLOUDINARY_API_KEY"),
-#     api_secret = os.getenv("CLOUDINARY_API_SECRET")
-# )
 
 
 @app.get("/")
@@ -28,112 +18,165 @@ def home():
 def generate_cadastral_plan():
     data = request.get_json()
 
-    plan = PlanProps(**data)
-    extent = plan.get_extent()
-    beacon_size = extent * 0.02
+    plan = CadastralPlan(**data)
+    plan.draw()
 
-    drawer = SurveyDXFManager(plan_name=plan.name, scale=plan.get_drawing_scale())
-    drawer.setup_beacon_style(type_=plan.beacon_type, size=beacon_size or 1.0)
-    drawer.setup_font(plan.font)
-
-    label_height = extent * 0.015 if extent > 0 else 1.0
-
-    # Draw beacon and labels
-    for coord in plan.coordinates:
-        drawer.add_beacon(coord.easting, coord.northing, 0, beacon_size * 0.5, coord.id)
-
-    # create a dictionary of coordinates for easy lookup
-    coord_dict = {coord.id: coord for coord in plan.coordinates}
-    parcel_dict = {}
-
-    # Draw parcels
-    for parcel in plan.parcels:
-        parcel_points = []
-        for point_id in parcel.ids:
-            if point_id in coord_dict:
-                coord = coord_dict[point_id]
-                parcel_points.append((coord.easting, coord.northing))
-        if parcel_points:
-            drawer.add_parcel(parcel.name, parcel_points)
-
-            # add bearing and distance text
-            orientation = polygon_orientation(parcel_points)
-            for leg in parcel.legs:
-                # compute rotational angle for text
-                angle_rad = math.atan2(leg.to.northing - leg.from_.northing, leg.to.easting - leg.from_.easting)
-                angle_deg = math.degrees(angle_rad)
-
-                first_x = leg.from_.easting + (0.2 * (leg.to.easting - leg.from_.easting))
-                first_y = leg.from_.northing + (0.2 * (leg.to.northing - leg.from_.northing))
-                last_x = leg.from_.easting + (0.8 * (leg.to.easting - leg.from_.easting))
-                last_y = leg.from_.northing + (0.8 * (leg.to.northing - leg.from_.northing))
-                mid_x = (leg.from_.easting + leg.to.easting) / 2
-                mid_y = (leg.from_.northing + leg.to.northing) / 2
-
-                # Offset text above/below the line
-                normals = line_normals((leg.from_.easting, leg.from_.northing), (leg.to.easting, leg.to.northing), orientation)
-                offset_distance = extent * 0.02
-                offset_inside_x = (normals[0][0] / math.hypot(*normals[0])) * offset_distance
-                offset_inside_y = (normals[0][1] / math.hypot(*normals[0])) * offset_distance
-                offset_outside_x = (normals[1][0] / math.hypot(*normals[1])) * offset_distance
-                offset_outside_y = (normals[1][1] / math.hypot(*normals[1])) * offset_distance
-                first_x += offset_outside_x
-                first_y += offset_outside_y
-                last_x += offset_outside_x
-                last_y += offset_outside_y
-                mid_x += offset_inside_x
-                mid_y += offset_inside_y
-
-                # add texts
-                text_angle = angle_deg
-                if text_angle > 90 or text_angle < -90:
-                    text_angle += 180
-
-                drawer.add_text(f"{leg.distance:.2f} m", mid_x, mid_y, angle=text_angle, height=label_height)
-                ld = line_direction(angle_deg)
-                if ld == "left → right":
-                    drawer.add_text(f"{leg.bearing.degrees}°", first_x, first_y, angle=text_angle, height=label_height)
-                    drawer.add_text(f"{leg.bearing.minutes}'", last_x, last_y, angle=text_angle, height=label_height)
-                else:
-                    drawer.add_text(f"{leg.bearing.degrees}°", last_x, last_y, angle=text_angle, height=label_height)
-                    drawer.add_text(f"{leg.bearing.minutes}'", first_x, first_y, angle=text_angle, height=label_height)
-            parcel_dict[parcel.name] = parcel_points
-
-    # Compute extent sizes
-    min_x, min_y, max_x, max_y = plan.get_bounding_box()
-    width = max_x - min_x
-    height = max_y - min_y
-
-    # Draw frame
-    margin_x = max(width, height) * 0.35
-    margin_y = max(height, width) * 0.7
-    frame_left = min_x - margin_x
-    frame_bottom = min_y - margin_y
-    frame_right = max_x + margin_x
-    frame_top = max_y + margin_y
-    drawer.draw_frame(frame_left, frame_bottom, frame_right,frame_top)
-
-    # offset frame
-    offset_x = max(width, height) * 0.38
-    offset_y = max(height, width) * 0.73
-    drawer.draw_frame(min_x - offset_x, min_y - offset_y, max_x + offset_x, max_y + offset_y)
-
-    # add title block
-    # Calculate center position for title
-    frame_width = frame_right - frame_left
-    frame_center_x = frame_left + (frame_width / 2)
-
-    # Title positioning
-    title_y = frame_top - (margin_y * 0.2)  # 5 units below the top of frame
-    title_height = plan.font_size  # Height of title text
-    title_width = frame_width * 0.6  # Use 60% of frame width for title box
-
-    drawer.add_title(html_to_mtext(plan.build_title()), frame_center_x, title_y, title_width, title_height)
-
-    # drawer.save_dxf()
-    # drawer.dxf_to_dwg()
-    url = drawer.save()
+    url = plan.save()
     return jsonify({"message": "Cadastral plan generated", "filename": plan.name, "url": url}), 200
+
+# @app.route("/route/plan", methods=["POST"])
+# def generate_route_plan():
+#     data = request.get_json()
+#     plan = PlanProps(**data)
+#     return jsonify({"message": "Cadastral plan generated", "filename": plan.name, "url": "url"}), 200
+
+# def read_json_file(file_path: str):
+#     """
+#     Reads data from a JSON file.
+#
+#     Args:
+#         file_path (str): Path to the JSON file.
+#
+#     Returns:
+#         dict | list: Parsed JSON data.
+#     """
+#     try:
+#         with open(file_path, "r", encoding="utf-8") as f:
+#             data = json.load(f)
+#         return data
+#     except FileNotFoundError:
+#         print(f"Error: File '{file_path}' not found.")
+#         return None
+#     except json.JSONDecodeError as e:
+#         print(f"Error: Failed to decode JSON - {e}")
+#         return None
+
+# @app.route("/topographic/plan", methods=["POST"])
+# def generate_topographic_plan():
+#     data = request.get_json()
+#
+#     plan = PlanProps(**data)
+#
+#     drawer = SurveyDXFManager(plan_name=plan.name, scale=plan.get_drawing_scale())
+#     drawer.setup_font(plan.font)
+#     drawer.setup_topo_point_style()
+#
+#     data = read_json_file("point2.json")
+#     plan.coordinates = [CoordinateProps(**c) for c in data]
+#
+#     # draw spot heights
+#     # for coord in plan.coordinates:
+#     #     drawer.add_topo_point(coord.easting, coord.northing, coord.elevation, f"{coord.elevation:.3f}", plan.top_setting.point_label_scale)
+#
+#     # Generate a surface (TIN interpolation).
+#     x = np.array([coord.easting for coord in plan.coordinates])
+#     y = np.array([coord.northing for coord in plan.coordinates])
+#     z = np.array([coord.elevation for coord in plan.coordinates])
+#
+#     # Create triangulation
+#     triangulation = Triangulation(x, y)
+#
+#     # Generate contour levels
+#     z_min, z_max = z.min(), z.max()
+#     levels = np.linspace(z_min, z_max, 100)
+#
+#     # Create matplotlib contours (using memory buffer to avoid display)
+#     contours = plt.tricontour(triangulation, z, levels=levels)
+#
+#     # Define major contour interval (every 5th contour)
+#     major_interval = max(1, len(levels) // 5)
+#
+#     # Extract and draw contour lines
+#     contour_data = []
+#
+#     # Access contour segments using allsegs attribute (more reliable)
+#     if hasattr(contours, 'allsegs') and len(contours.allsegs) > 0:
+#         for level_idx, level_segments in enumerate(contours.allsegs):
+#             elevation = levels[level_idx]
+#         is_major = (level_idx % major_interval == 0)
+#             layer_name = 'CONTOURS_MAJOR' if is_major else 'CONTOURS_MINOR'
+#
+#             # Process each contour segment at this elevation
+#             for segment in level_segments:
+#                 if len(segment) < 2:
+#                     continue
+#
+#                 # Convert to list of tuples for ezdxf
+#                 points = [(float(x), float(y), float(elevation)) for x, y in segment]
+#
+#                 # Add polyline to DXF
+#                 polyline = drawer.msp.add_polyline3d(
+#                     points,
+#                     dxfattribs={'layer': layer_name}
+#                 )
+#
+#                 # Store contour data
+#                 contour_data.append({
+#                     'elevation': elevation,
+#                     'coordinates': segment,
+#                     'is_major': is_major,
+#                     'polyline': polyline
+#                 })
+#
+#                 # Add elevation labels for major contours
+#                 if is_major and len(points) > 0:
+#                     # Place label at midpoint of contour
+#                     mid_idx = len(points) // 2
+#                     label_x, label_y, _ = points[mid_idx]
+#
+#                     drawer.msp.add_text(
+#                         f"{elevation:.1f}",
+#                         dxfattribs={
+#                             'layer': 'CONTOUR_LABELS',
+#                             'height': 2.5,
+#                             'style': 'Standard'
+#                         }
+#                     ).set_placement((label_x, label_y), align=TextEntityAlignment.MIDDLE_CENTER)
+#     else:
+#         print("Warning: No contour segments found. Check your input data.")
+#
+#     # # Create triangulation
+#     # triangulation = Triangulation(x, y)
+#     #
+#     # # Draw triangle edges
+#     # for triangle in triangulation.triangles:
+#     #     # Get the three vertices of each triangle
+#     #     p1 = (x[triangle[0]], y[triangle[0]])
+#     #     p2 = (x[triangle[1]], y[triangle[1]])
+#     #     p3 = (x[triangle[2]], y[triangle[2]])
+#     #
+#     #     # Create closed polyline for triangle
+#     #     triangle_points = [p1, p2, p3, p1]  # Close the triangle
+#     #
+#     #     drawer.msp.add_lwpolyline(
+#     #         triangle_points,
+#     #         dxfattribs={'layer': "TIN_TRIANGLES"}
+#     #     )
+#
+#     # # Find range
+#     # z_min, z_max = z.min(), z.max()
+#     #
+#     # # Choose interval (e.g., 1 meter)
+#     # interval = 0.1
+#     #
+#     # # Define levels
+#     # levels = np.arange(np.floor(z_min), np.ceil(z_max) + interval, interval)
+#     #
+#     # contours = plt.tricontour(triang, z, levels=levels)
+#     #
+#     # # ✅ Each contour level has multiple paths
+#     # for level, path_collection in zip(contours.levels, contours.get_paths()):
+#     #     for polygon in path_collection.to_polygons():
+#     #         points = [(pt[0], pt[1], float(level)) for pt in polygon]
+#     #         if len(points) > 1:
+#     #             # Create 3D polyline
+#     #             drawer.msp.add_polyline3d(points, dxfattribs={"layer": "CONTOURS"})
+#
+#     drawer.save_dxf()
+#     # url = drawer.save()
+#     return jsonify({"message": "Topographic plan generated", "filename": plan.name, "url": "url"}), 200
+
+
 
 @app.errorhandler(404)
 def not_found(e):

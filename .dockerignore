@@ -1,1 +1,65 @@
+# Byte-compiled / cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Distribution / packaging
+*.egg-info/
+.eggs/
+build/
+dist/
+pip-wheel-metadata/
+
+# Logs
+*.log
+
+# Unit test / coverage reports
+.coverage
+.tox/
+.nox/
+.pytest_cache/
+
+# Jupyter / IPython
+.ipynb_checkpoints
+*.ipynb
+
+# Environment files (secrets)
+#.env
+#.env.*
+#*.env
+
+# IDE / editor configs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Git
+.git
+.gitignore
+
+# Docker
+.dockerignore
+docker-compose.override.yml
+
+# Flask specific
+instance/
+*.db
+*.sqlite3
+
+# Cache
+.cache/
+
 fly.toml

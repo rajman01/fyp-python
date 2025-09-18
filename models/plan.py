@@ -20,10 +20,18 @@ class BeaconType(str, Enum):
     BOX = "box"
     NONE = "none"
 
+class PageSize(str, Enum):
+    A4 = "A4"
+    A3 = "A3"
+    A2 = "A2"
+
+class PageOrientation(str, Enum):
+    PORTRAIT = "portrait"
+    LANDSCAPE = "landscape"
 
 # ---------- Supporting models ----------
 class CoordinateProps(BaseModel):
-    id: str
+    id: str = ""
     northing: Optional[float] = 0.0
     easting: Optional[float] = 0.0
     elevation: Optional[float] = 0.0
@@ -47,17 +55,29 @@ class ParcelProps(BaseModel):
     area: Optional[float] = None  # in square meters
     legs: List[TraverseLegProps] = []
 
-# ---------- Computation models ----------
-class ForwardComputationData(BaseModel):
-    coordinates: Optional[List[CoordinateProps]] = None
-    start: CoordinateProps
-    legs: List[TraverseLegProps]
-    misclosure_correction: Optional[bool] = False
+class ElevationProps(BaseModel):
+    id: str
+    elevation: float
+    chainage: str
 
-class TraverseComputationData(BaseModel):
-    coordinates: List[CoordinateProps]
-    legs: List[TraverseLegProps]
-    misclosure_correction: Optional[bool] = False
+class TopographicSettingProps(BaseModel):
+    show_spot_heights: bool = True
+    point_label_scale: float = 1.0
+    show_contours: bool = True
+    contour_interval: float = 1.0
+    major_contour: float = 5.0
+    minimum_distance: float = 0.1 # 0.1 to 0.5
+    show_contours_labels: bool = True
+    contour_label_scale: float = 1.0
+    show_boundary: bool = True
+    boundary_label_scale: float = 1.0
+    tin: Optional[bool] = False
+    grid: Optional[bool] = False
+
+class TopographicBoundaryProps(BaseModel):
+    coordinates: List[CoordinateProps] = []
+    area: Optional[float] = None
+    legs: Optional[List[TraverseLegProps]] = []
 
 
 # ---------- Main Plan Model ----------
@@ -69,10 +89,11 @@ class PlanProps(BaseModel):
     project: Union[str, dict]
     name: str
     type: PlanType = PlanType.CADASTRAL
-    font: str = "Arial"
+    font: str = "Times New Roman"
     font_size: int = 12
-    coordinates: List[CoordinateProps] = []
-    parcels: List[ParcelProps] = []
+    coordinates: Optional[List[CoordinateProps]] = None
+    elevations: Optional[List[ElevationProps]] = None
+    parcels: Optional[List[ParcelProps]] = None
     title: str = "Untitled Plan"
     address: str = ""
     local_govt: str = ""
@@ -80,11 +101,16 @@ class PlanProps(BaseModel):
     plan_number: str = ""
     origin: PlanOrigin = PlanOrigin.UTM_ZONE_31
     scale: float = 1000
-    beacon_type: BeaconType = BeaconType.NONE
+    beacon_type: BeaconType = BeaconType.BOX
+    beacon_size: float = 0.3
+    label_scale: float = 1.0
     personel_name: str = ""
     surveyor_name: str = ""
-    forward_computation_data: Optional[ForwardComputationData] = None
-    traverse_computation_data: Optional[TraverseComputationData] = None
+    page_size: PageSize = PageSize.A4
+    page_orientation: PageOrientation = PageOrientation.PORTRAIT
+    topographic_setting: Optional[TopographicSettingProps] = None
+    topographic_boundary: Optional[TopographicBoundaryProps] = None
+    notes: List[str] = []
 
     def get_drawing_scale(self):
         if not self.scale:
