@@ -42,7 +42,7 @@ class CadastralPlan(PlanProps):
             if not parcel_points:
                 continue
 
-            self._drawer.add_parcel(parcel.name, parcel_points)
+            self._drawer.add_parcel(parcel.name, parcel_points, label_scale=self.label_scale)
             orientation = polygon_orientation(parcel_points)
 
             for leg in parcel.legs:

@@ -55,7 +55,7 @@ class SurveyDXFManager:
 
         # Point styles (using blocks)
         block = self.doc.blocks.new(name='BEACON_POINT')
-        radius = size * self.scale * 0.2  # inner hatch radius
+        radius = size * 0.2  # inner hatch radius
         half = size / 2  # half-size for square
 
         # Filled (solid hatch) circle
@@ -114,10 +114,11 @@ class SurveyDXFManager:
                 (x + offset, y + offset)
             )
 
-    def add_parcel(self, parcel_id: str, points: list):
+    def add_parcel(self, parcel_id: str, points: list, label_scale: float = 1.0):
         """Add a parcel given its ID and list of (x, y) points"""
         # scale points
         points = [(x * self.scale, y * self.scale) for x, y, *rest in points]
+        label_scale = label_scale * self.scale
 
         self.msp.add_lwpolyline(points, close=True, dxfattribs={
             'layer': 'LINES'
@@ -125,13 +126,13 @@ class SurveyDXFManager:
 
         # Add parcel ID label at centroid
         if points and parcel_id:
-            centroid_x = (sum(p[0] for p in points) / len(points)) * self.scale
-            centroid_y = (sum(p[1] for p in points) / len(points)) * self.scale
+            centroid_x = sum(p[0] for p in points) / len(points)
+            centroid_y = sum(p[1] for p in points) / len(points)
             self.msp.add_text(
                 parcel_id,
                 dxfattribs={
                     'layer': 'LABELS',
-                    'height': 2.0 * self.scale,
+                    'height': label_scale,
                     'style': 'SURVEY_TEXT',
                     'color': 2  # Yellow
                 }
