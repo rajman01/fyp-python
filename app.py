@@ -95,7 +95,7 @@ def generate_topographic_plan():
 #
 #     # Create matplotlib contours (using memory buffer to avoid display)
 #     contours = plt.tricontour(triangulation, z, levels=levels)
-#
+
 #     # Define major contour interval (every 5th contour)
 #     major_interval = max(1, len(levels) // 5)
 #

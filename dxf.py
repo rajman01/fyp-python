@@ -10,7 +10,8 @@ from datetime import datetime
 import uuid
 import zipfile
 from upload import upload_file
-from ezdxf import bbox
+from ezdxf import bbox, colors
+
 
 
 class SurveyDXFManager:
@@ -49,9 +50,9 @@ class SurveyDXFManager:
         for name, color in layers:
             self.doc.layers.add(name=name, color=color)
 
-        # self.doc.layers.new('CONTOURS_MAJOR', dxfattribs={'color': colors.RED, 'lineweight': 50})
-        # self.doc.layers.new('CONTOURS_MINOR', dxfattribs={'color': colors.BLUE, 'lineweight': 25})
-        # self.doc.layers.new('CONTOUR_LABELS', dxfattribs={'color': colors.BLACK})
+        self.doc.layers.new('CONTOURS_MAJOR', dxfattribs={'color': colors.RED})
+        self.doc.layers.new('CONTOURS_MINOR', dxfattribs={'true_color': ezdxf.colors.rgb2int((127, 31, 0))})
+        self.doc.layers.new('CONTOUR_LABELS', dxfattribs={'color': colors.BLACK})
         # self.doc.layers.new("TIN_TRIANGLES", dxfattribs={'color': colors.CYAN, 'lineweight': 10})
 
     def setup_beacon_style(self, type_: str = "box", size: float = 1.0):
@@ -394,7 +395,7 @@ class SurveyDXFManager:
                 dxfattribs={
                     'layer': 'SPOT_HEIGHTS',
                     'height': text_height,
-                    'style': 'SURVEY_TEXT',
+                    'style': 'Standard',
                     'color': 7  # Black/White
                 }
             ).set_placement(
@@ -458,27 +459,27 @@ class SurveyDXFManager:
         odafc.convert(dxf_filepath, filepath)
 
     def save(self, paper_size: str = "A4", orientation: str = "portrait"):
-        # with tempfile.TemporaryDirectory() as tmpdir:
-        filename = self.get_filename()
-        dxf_path = os.path.join("", f"{filename}.dxf")
-        # dwg_path =  os.path.join(tmpdir, f"{filename}.dwg")
-        pdf_path =  os.path.join("", f"{filename}.pdf")
-        zip_path = os.path.join("", f"{filename}.zip")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            filename = self.get_filename()
+            dxf_path = os.path.join("", f"{filename}.dxf")
+            dwg_path =  os.path.join(tmpdir, f"{filename}.dwg")
+            pdf_path =  os.path.join("", f"{filename}.pdf")
+            zip_path = os.path.join("", f"{filename}.zip")
 
-        self.save_dxf(dxf_path)
-        # self.save_dwg(dxf_path, dwg_path)
-        self.save_pdf(pdf_path, paper_size=paper_size, orientation=orientation)
+            self.save_dxf(dxf_path)
+            self.save_dwg(dxf_path, dwg_path)
+            self.save_pdf(pdf_path, paper_size=paper_size, orientation=orientation)
 
-        # Create a ZIP file containing all three formats
-        with zipfile.ZipFile(zip_path, "w") as zipf:
-            zipf.write(dxf_path, os.path.basename(dxf_path))
-            # zipf.write(dwg_path, os.path.basename(dwg_path))
-            zipf.write(pdf_path, os.path.basename(pdf_path))
+            # Create a ZIP file containing all three formats
+            with zipfile.ZipFile(zip_path, "w") as zipf:
+                zipf.write(dxf_path, os.path.basename(dxf_path))
+                zipf.write(dwg_path, os.path.basename(dwg_path))
+                zipf.write(pdf_path, os.path.basename(pdf_path))
 
-        url = upload_file(zip_path, folder="survey_plans", file_name=filename)
-        if url is None:
-            raise Exception("Upload failed")
-        return url
+            url = upload_file(zip_path, folder="survey_plans", file_name=filename)
+            if url is None:
+                raise Exception("Upload failed")
+            return url
 
     # def add_topo_point(self, x: float, y: float, z: float, label: str = None, text_height: float = 1.0):
     #     self.msp.add_blockref(
