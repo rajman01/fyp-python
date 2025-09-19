@@ -155,12 +155,32 @@ class CadastralPlan(PlanProps):
                                       area=f"AREA :- {self.parcels[0].area} SQ.METRES",
                                       origin=f"ORIGIN :- {self.origin.upper()}")
 
+    def draw_footer_boxes(self):
+        if len(self.footers) == 0:
+            return
+
+        x_min = self._frame_coords[0]
+        y_min = self._frame_coords[1]
+        x_max = self._frame_coords[2]
+        y_max = self._frame_coords[3]
+
+        box_width = (x_max - x_min) / len(self.footers)
+        box_height = (y_max - y_min) * 0.25
+
+        for i, footer in enumerate(self.footers):
+            x1 = x_min + i * box_width
+            x2 = x1 + box_width
+            y1 = y_min
+            y2 = y1 + box_height
+            self._drawer.draw_footer_box(html_to_mtext(footer), x1, y1, x2, y2, self.footer_scale)
+
     def draw(self):
         # Draw elements
         self.draw_beacons()
         self.draw_parcels()
         self.draw_frames()
         self.draw_title_block()
+        self.draw_footer_boxes()
 
     def save_dxf(self, file_path: str):
         self._drawer.save_dxf(file_path)

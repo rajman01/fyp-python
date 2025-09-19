@@ -110,7 +110,8 @@ class PlanProps(BaseModel):
     page_orientation: PageOrientation = PageOrientation.PORTRAIT
     topographic_setting: Optional[TopographicSettingProps] = None
     topographic_boundary: Optional[TopographicBoundaryProps] = None
-    notes: List[str] = []
+    footers: List[str] = []
+    footer_scale: float = 0.5
 
     def get_drawing_scale(self):
         if not self.scale:

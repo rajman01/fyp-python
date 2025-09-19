@@ -42,6 +42,7 @@ class SurveyDXFManager:
             ('TITLE_BLOCK', 7),  # White
             ('TRAVERSE', 6),  # Magenta
             ('SPOT_HEIGHTS', 3),  # Green
+            ("FOOTER", 7),  # Black/White
         ]
 
         for name, color in layers:
@@ -298,6 +299,38 @@ class SurveyDXFManager:
         origin_mtext.dxf.char_height = title_height
         origin_mtext.dxf.width = width
         origin_mtext.set_location((x, graphical_min_y - (1 * self.scale)))
+
+    def draw_footer_box(self, text: str, min_x, min_y, max_x, max_y, font_size: float = 1.0):
+        font_size = font_size * self.scale
+        min_x = min_x * self.scale
+        min_y = min_y * self.scale
+        max_x = max_x * self.scale
+        max_y = max_y * self.scale
+
+        """Draw a rectangle given min and max coordinates"""
+        self.msp.add_lwpolyline([
+            (min_x, min_y),
+            (max_x, min_y),
+            (max_x, max_y),
+            (min_x, max_y)
+        ], close=True, dxfattribs={
+            'layer': 'FOOTER',
+        })
+
+        # add text inside box
+        footer_mtext = self.msp.add_mtext(
+            text=text,
+            dxfattribs={
+                'layer': 'FOOTER',
+                'style': 'SURVEY_TEXT',
+                # 'height': (max_y - min_y) * 0.8,
+            }
+        )
+        footer_mtext.dxf.attachment_point = ezdxf.enums.MTextEntityAlignment.TOP_LEFT
+        footer_mtext.dxf.width = (max_x - min_x) * 0.9
+        # set location at top-left corner with some padding
+        footer_mtext.set_location((min_x + (0.05 * (max_x - min_x)), max_y - (0.1 * (max_y - min_y))))
+        footer_mtext.dxf.char_height = font_size
 
 
     def draw_frame(self, min_x, min_y, max_x, max_y):
