@@ -15,6 +15,7 @@ class CadastralPlan(PlanProps):
 
         self._frame_x_percent = 0.35
         self._frame_y_percent = 0.8
+        self._bounding_box = self.get_bounding_box()
         self._frame_coords = self._setup_frame_coords()
         if not self._frame_coords:
             raise ValueError("Cannot determine frame coordinates without valid coordinates.")
@@ -28,7 +29,7 @@ class CadastralPlan(PlanProps):
         return drawer
 
     def _setup_frame_coords(self):
-        min_x, min_y, max_x, max_y = self.get_bounding_box()
+        min_x, min_y, max_x, max_y = self._bounding_box
         if min_x is None or min_y is None or max_x is None or max_y is None:
             return None
 
@@ -121,7 +122,7 @@ class CadastralPlan(PlanProps):
 
     def draw_frames(self):
         """Draw outer and offset frames."""
-        min_x, min_y, max_x, max_y = self.get_bounding_box()
+        min_x, min_y, max_x, max_y = self._bounding_box
         width, height = max_x - min_x, max_y - min_y
 
         margin_x, margin_y = max(width, height) * self._frame_x_percent, max(height, width) * self._frame_y_percent
@@ -135,7 +136,7 @@ class CadastralPlan(PlanProps):
 
     def draw_title_block(self):
         """Add title block to the frame."""
-        min_x, min_y, max_x, max_y = self.get_bounding_box()
+        min_x, min_y, max_x, max_y = self._bounding_box
         width, height = max_x - min_x, max_y - min_y
 
         margin_x, margin_y = max(width, height) * self._frame_x_percent, max(height, width) * self._frame_y_percent

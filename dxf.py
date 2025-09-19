@@ -41,8 +41,9 @@ class SurveyDXFManager:
             ('DIMENSIONS', 4),  # Cyan
             ('TITLE_BLOCK', 7),  # White
             ('TRAVERSE', 6),  # Magenta
-            ('SPOT_HEIGHTS', 3),  # Green
+            ('SPOT_HEIGHTS', 7),  # Black/White
             ("FOOTER", 7),  # Black/White
+            ('BOUNDARY', 1),  # Red
         ]
 
         for name, color in layers:
@@ -85,6 +86,21 @@ class SurveyDXFManager:
             hatch = block.add_hatch(color=7)
             path = hatch.paths.add_edge_path()
             path.add_arc((0, 0), radius=radius, start_angle=0, end_angle=360)
+
+    def setup_topo_point_style(self, type_: str = "cross", size: float = 1):
+        size = size * self.scale
+
+        # Point styles (using blocks)
+        block = self.doc.blocks.new(name='TOPO_POINT')
+        if type_ == "cross":
+            # cross only
+            block.add_line((-size, -size), (size, size), dxfattribs={"true_color": ezdxf.colors.rgb2int((205, 105, 40))})  # Green
+            block.add_line((-size, size), (size, -size), dxfattribs={"true_color": ezdxf.colors.rgb2int((205, 105, 40))})
+        else:
+            block.add_line((-size, -size), (size, size), dxfattribs={"true_color": ezdxf.colors.rgb2int((205, 105, 40))})
+            block.add_line((-size, size), (size, -size), dxfattribs={"true_color": ezdxf.colors.rgb2int((205, 105, 40))})
+
+        block.add_point((0, 0), dxfattribs={"true_color": ezdxf.colors.rgb2int((205, 105, 40))})  # Green
 
     def setup_graphical_scale_style(self, length: float = 1000):
         length = length * self.scale
@@ -231,6 +247,15 @@ class SurveyDXFManager:
                 align=TextEntityAlignment.MIDDLE_CENTER
             )
 
+    def add_boundary(self, points: list):
+        """Add a boundaty given its ID and list of (x, y) points"""
+        # scale points
+        points = [(x * self.scale, y * self.scale) for x, y, *rest in points]
+
+        self.msp.add_lwpolyline(points, close=True, dxfattribs={
+            'layer': 'BOUNDARY'
+        })
+
     def add_text(self, text: str, x: float, y: float, angle: float = 0.0, height: float = 1.0):
         x = x * self.scale
         y = y * self.scale
@@ -284,7 +309,7 @@ class SurveyDXFManager:
         # add graphical scale below title
         graphical_ref = self.msp.add_blockref(
             'GRAPHICAL_SCALE',
-            (graphical_x, title_min_y - (3.5 * self.scale)),
+            (graphical_x, title_min_y - (graphical_scale_length * 0.05 * 3)),
             dxfattribs={'layer': 'TITLE_BLOCK'}
         )
 
@@ -332,7 +357,6 @@ class SurveyDXFManager:
         footer_mtext.set_location((min_x + (0.05 * (max_x - min_x)), max_y - (0.1 * (max_y - min_y))))
         footer_mtext.dxf.char_height = font_size
 
-
     def draw_frame(self, min_x, min_y, max_x, max_y):
         min_x = min_x * self.scale
         min_y = min_y * self.scale
@@ -348,6 +372,34 @@ class SurveyDXFManager:
         ], close=True, dxfattribs={
             'layer': 'FRAME',
         })
+
+    def draw_topo_point(self, x: float, y: float, z: float = 0, label: str = None, text_height: float = 1.0):
+        # Add a topo point with optional label
+        x = x * self.scale
+        y = y * self.scale
+        z = z * self.scale
+        text_height = text_height * self.scale
+
+        self.msp.add_blockref(
+            'TOPO_POINT',
+            (x, y, z),
+            dxfattribs={'layer': 'SPOT_HEIGHTS'}
+        )
+
+        # add label
+        if label is not None:
+            offset = 0.5 * self.scale
+            self.msp.add_text(
+                label,
+                dxfattribs={
+                    'layer': 'SPOT_HEIGHTS',
+                    'height': text_height,
+                    'style': 'SURVEY_TEXT',
+                    'color': 7  # Black/White
+                }
+            ).set_placement(
+                (x + offset, y + offset, z + offset)
+            )
 
     def get_filename(self):
         plan_name = self.plan_name.lower()
@@ -406,27 +458,27 @@ class SurveyDXFManager:
         odafc.convert(dxf_filepath, filepath)
 
     def save(self, paper_size: str = "A4", orientation: str = "portrait"):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            filename = self.get_filename()
-            dxf_path = os.path.join(tmpdir, f"{filename}.dxf")
-            # dwg_path =  os.path.join(tmpdir, f"{filename}.dwg")
-            pdf_path =  os.path.join(tmpdir, f"{filename}.pdf")
-            zip_path = os.path.join(tmpdir, f"{filename}.zip")
+        # with tempfile.TemporaryDirectory() as tmpdir:
+        filename = self.get_filename()
+        dxf_path = os.path.join("", f"{filename}.dxf")
+        # dwg_path =  os.path.join(tmpdir, f"{filename}.dwg")
+        pdf_path =  os.path.join("", f"{filename}.pdf")
+        zip_path = os.path.join("", f"{filename}.zip")
 
-            self.save_dxf(dxf_path)
-            # self.save_dwg(dxf_path, dwg_path)
-            self.save_pdf(pdf_path, paper_size=paper_size, orientation=orientation)
+        self.save_dxf(dxf_path)
+        # self.save_dwg(dxf_path, dwg_path)
+        self.save_pdf(pdf_path, paper_size=paper_size, orientation=orientation)
 
-            # Create a ZIP file containing all three formats
-            with zipfile.ZipFile(zip_path, "w") as zipf:
-                zipf.write(dxf_path, os.path.basename(dxf_path))
-                # zipf.write(dwg_path, os.path.basename(dwg_path))
-                zipf.write(pdf_path, os.path.basename(pdf_path))
+        # Create a ZIP file containing all three formats
+        with zipfile.ZipFile(zip_path, "w") as zipf:
+            zipf.write(dxf_path, os.path.basename(dxf_path))
+            # zipf.write(dwg_path, os.path.basename(dwg_path))
+            zipf.write(pdf_path, os.path.basename(pdf_path))
 
-            url = upload_file(zip_path, folder="survey_plans", file_name=filename)
-            if url is None:
-                raise Exception("Upload failed")
-            return url
+        url = upload_file(zip_path, folder="survey_plans", file_name=filename)
+        if url is None:
+            raise Exception("Upload failed")
+        return url
 
     # def add_topo_point(self, x: float, y: float, z: float, label: str = None, text_height: float = 1.0):
     #     self.msp.add_blockref(

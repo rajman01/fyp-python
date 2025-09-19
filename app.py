@@ -1,5 +1,8 @@
 import os
 from dotenv import load_dotenv
+
+from topographic import TopographicPlan
+
 load_dotenv()  # reads .env into environment
 
 from cadastral import CadastralPlan
@@ -23,6 +26,16 @@ def generate_cadastral_plan():
 
     url = plan.save()
     return jsonify({"message": "Cadastral plan generated", "filename": plan.name, "url": url}), 200
+
+@app.route("/topographic/plan", methods=["POST"])
+def generate_topographic_plan():
+    data = request.get_json()
+
+    plan = TopographicPlan(**data)
+    plan.draw()
+
+    url = plan.save()
+    return jsonify({"message": "Topographic plan generated", "filename": plan.name, "url": url}), 200
 
 # @app.route("/route/plan", methods=["POST"])
 # def generate_route_plan():
