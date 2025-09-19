@@ -10,6 +10,8 @@ from datetime import datetime
 import uuid
 import zipfile
 from upload import upload_file
+from ezdxf import bbox
+
 
 class SurveyDXFManager:
     def __init__(self, plan_name: str = "Survey Plan", scale: float = 1.0):
@@ -83,6 +85,93 @@ class SurveyDXFManager:
             path = hatch.paths.add_edge_path()
             path.add_arc((0, 0), radius=radius, start_angle=0, end_angle=360)
 
+    def setup_graphical_scale_style(self, length: float = 1000):
+        length = length * self.scale
+        height = length * 0.05  # 5% of length
+
+        interval = length / 5 # 5 intervals
+
+        # Create a block for the graphical scale
+        block = self.doc.blocks.new(name='GRAPHICAL_SCALE')
+
+        # draw large rectangle
+        block.add_lwpolyline(
+            [(0, 0), (length, 0), (length, height), (0, height)],
+            close=True,
+            dxfattribs={'color': 7}  # Black/White
+        )
+
+        # draw middle line
+        block.add_line(
+            (0, height / 2),
+            (length, height / 2),
+            dxfattribs={'color': 7}
+        )
+
+        text_interval = 1000 / self.scale / 10 / 5
+
+        # draw interval lines
+        to_shade = "up"
+        for i in range(6):
+            x = i * interval
+            line_height = height * 1.5
+            block.add_line(
+                (x, 0),
+                (x, line_height),
+                dxfattribs={'color': 7}
+            )
+
+            text = f"{int((i - 1) * text_interval)}"
+            alignment = TextEntityAlignment.TOP_CENTER
+            if i == 0:
+                text = f"Meters {int(text_interval)}"
+                alignment = TextEntityAlignment.TOP_RIGHT
+            if i == 5:
+                text = f"{int((i - 1) * text_interval)} Meters"
+                alignment = TextEntityAlignment.TOP_LEFT
+
+
+            # add text above line
+            block.add_text(
+                text,
+                dxfattribs={
+                    'height': height * 0.5,
+                    'color': 7,
+                    'style': 'SURVEY_TEXT'
+                }
+            ).set_placement(
+                (x, height * 2.3),
+                align=alignment
+            )
+
+
+            if i == 5:
+                continue
+
+            if i == 0:
+                mini_interval = interval / 2
+                for j in range(2):
+                    mini_x = j * mini_interval
+                    if to_shade == "up":
+                        # shade first upper half
+                        hatch = block.add_hatch(color=7)
+                        hatch.paths.add_polyline_path([(mini_x, height / 2), (mini_x + mini_interval, height / 2), (mini_x + mini_interval, height), (mini_x, height)])
+                        to_shade = "down"
+                    else:
+                        # shade lower half
+                        hatch = block.add_hatch(color=7)
+                        hatch.paths.add_polyline_path([(mini_x, 0), (mini_x + mini_interval, 0), (mini_x + mini_interval, height / 2), (mini_x, height / 2)])
+                        to_shade = "up"
+            else:
+                if to_shade == "up":
+                    hatch = block.add_hatch(color=7)
+                    hatch.paths.add_polyline_path([(x, height / 2), (x + interval, height / 2), (x + interval, height), (x, height)])
+                    to_shade = "down"
+                else:
+                    hatch = block.add_hatch(color=7)
+                    hatch.paths.add_polyline_path([(x, 0), (x + interval, 0), (x + interval, height / 2), (x, height / 2)])
+                    to_shade = "up"
+
     def setup_font(self, font_name: str = "Times New Roman"):
         # Add a new text style with the specified font
         self.doc.styles.add('SURVEY_TEXT', font=f'{font_name}.ttf')
@@ -147,7 +236,7 @@ class SurveyDXFManager:
         height = height * self.scale
 
         """Add arbitrary text at given coordinates with optional rotation"""
-        self.msp.add_text(
+        text = self.msp.add_text(
             text,
             dxfattribs={
                 'layer': 'LABELS',
@@ -160,21 +249,56 @@ class SurveyDXFManager:
             align=TextEntityAlignment.MIDDLE_CENTER
         )
 
-    def add_title(self, text: str, x: float, y: float, width: float, title_height: float = 1.0):
+    def draw_title_block(self, text: str, x: float, y: float, width: float, title_height: float = 1.0, graphical_scale_length: float = 1000.0, origin: str = "", area: str = ""):
         x = x * self.scale
         y = y * self.scale
         title_height = title_height * self.scale
         width = width * self.scale
+        graphical_scale_length = graphical_scale_length * self.scale
 
-        # Add title block text with underline
-        title_mtext = self.msp.add_mtext(
+        block = self.doc.blocks.new(name='TITLE_BLOCK')
+        title_mtext = block.add_mtext(
             text=f"{MTextEditor.UNDERLINE_START}{text}{MTextEditor.UNDERLINE_STOP}",
-            dxfattribs={'layer': 'TITLE_BLOCK', 'style': 'SURVEY_TEXT'},
+            dxfattribs={'style': 'SURVEY_TEXT'},
         )
-        title_mtext.set_location((x, y))
         title_mtext.dxf.attachment_point = ezdxf.enums.MTextEntityAlignment.TOP_CENTER
         title_mtext.dxf.char_height = title_height
         title_mtext.dxf.width = width
+
+        # add block to modelspace
+        title_ref = self.msp.add_blockref(
+            'TITLE_BLOCK',
+            (x, y),
+            dxfattribs={'layer': 'TITLE_BLOCK'}
+        )
+
+        title_box = bbox.extents(title_ref.virtual_entities())
+        title_min_y = title_box.extmin.y
+        title_min_x = title_box.extmin.x
+        title_max_x = title_box.extmax.x
+
+        title_length = title_max_x - title_min_x
+        graphical_x = title_min_x + ((title_length / 2) - (graphical_scale_length / 2))
+
+        # add graphical scale below title
+        graphical_ref = self.msp.add_blockref(
+            'GRAPHICAL_SCALE',
+            (graphical_x, title_min_y - (3.5 * self.scale)),
+            dxfattribs={'layer': 'TITLE_BLOCK'}
+        )
+
+        graphical_box = bbox.extents(graphical_ref.virtual_entities())
+        graphical_min_y = graphical_box.extmin.y
+
+        origin_mtext = self.msp.add_mtext(
+            text=f"{MTextEditor.UNDERLINE_START}\C5;{area}{MTextEditor.NEW_LINE}\C1;{origin}{MTextEditor.UNDERLINE_STOP}",
+            dxfattribs={'style': 'SURVEY_TEXT'},
+        )
+        origin_mtext.dxf.attachment_point = ezdxf.enums.MTextEntityAlignment.TOP_CENTER
+        origin_mtext.dxf.char_height = title_height
+        origin_mtext.dxf.width = width
+        origin_mtext.set_location((x, graphical_min_y - (1 * self.scale)))
+
 
     def draw_frame(self, min_x, min_y, max_x, max_y):
         min_x = min_x * self.scale

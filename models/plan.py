@@ -164,4 +164,3 @@ class PlanProps(BaseModel):
             soup.append(p4)
 
         return soup.prettify()
-

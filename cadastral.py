@@ -13,13 +13,37 @@ class CadastralPlan(PlanProps):
         if self.type != PlanType.CADASTRAL:
             raise ValueError("CadastralPlan must have type PlanType.CADASTRAL")
 
+        self._frame_x_percent = 0.35
+        self._frame_y_percent = 0.8
+        self._frame_coords = self._setup_frame_coords()
+        if not self._frame_coords:
+            raise ValueError("Cannot determine frame coordinates without valid coordinates.")
         self._drawer = self._setup_drawer()
 
     def _setup_drawer(self) -> SurveyDXFManager:
         drawer = SurveyDXFManager(plan_name=self.name, scale=self.get_drawing_scale())
         drawer.setup_font(self.font)
         drawer.setup_beacon_style(self.beacon_type, self.beacon_size)
+        drawer.setup_graphical_scale_style(length=(self._frame_coords[2] - self._frame_coords[0]) * 0.4)
         return drawer
+
+    def _setup_frame_coords(self):
+        min_x, min_y, max_x, max_y = self.get_bounding_box()
+        if min_x is None or min_y is None or max_x is None or max_y is None:
+            return None
+
+        width = max_x - min_x
+        height = max_y - min_y
+
+        margin_x = max(width, height) * self._frame_x_percent
+        margin_y = max(height, width) * self._frame_y_percent
+
+        frame_left = min_x - margin_x
+        frame_bottom = min_y - margin_y
+        frame_right = max_x + margin_x
+        frame_top = max_y + margin_y
+
+        return frame_left, frame_bottom, frame_right, frame_top
 
     def draw_beacons(self):
         if not self.coordinates:
@@ -100,21 +124,21 @@ class CadastralPlan(PlanProps):
         min_x, min_y, max_x, max_y = self.get_bounding_box()
         width, height = max_x - min_x, max_y - min_y
 
-        margin_x, margin_y = max(width, height) * 0.35, max(height, width) * 0.7
+        margin_x, margin_y = max(width, height) * self._frame_x_percent, max(height, width) * self._frame_y_percent
         frame_left, frame_bottom = min_x - margin_x, min_y - margin_y
         frame_right, frame_top = max_x + margin_x, max_y + margin_y
         self._drawer.draw_frame(frame_left, frame_bottom, frame_right, frame_top)
 
-        offset_x, offset_y = max(width, height) * 0.38, max(height, width) * 0.73
+        offset_x, offset_y = max(width, height) * (self._frame_x_percent + 0.03), max(height, width) * (self._frame_y_percent + 0.03)
         self._drawer.draw_frame(min_x - offset_x, min_y - offset_y,
                           max_x + offset_x, max_y + offset_y)
 
-    def draw_title(self):
+    def draw_title_block(self):
         """Add title block to the frame."""
         min_x, min_y, max_x, max_y = self.get_bounding_box()
         width, height = max_x - min_x, max_y - min_y
 
-        margin_x, margin_y = max(width, height) * 0.35, max(height, width) * 0.7
+        margin_x, margin_y = max(width, height) * self._frame_x_percent, max(height, width) * self._frame_y_percent
         frame_left, frame_bottom = min_x - margin_x, min_y - margin_y
         frame_right, frame_top = max_x + margin_x, max_y + margin_y
 
@@ -122,18 +146,21 @@ class CadastralPlan(PlanProps):
         frame_center_x = frame_left + (frame_width / 2)
 
         title_y = frame_top - (margin_y * 0.2)
-        self._drawer.add_title(html_to_mtext(self.build_title()),
+        self._drawer.draw_title_block(html_to_mtext(self.build_title()),
                          frame_center_x,
                          title_y,
                          frame_width * 0.6,
-                         self.font_size)
+                         self.font_size,
+                                      graphical_scale_length=(self._frame_coords[2] - self._frame_coords[0]) * 0.4,
+                                      area=f"AREA :- {self.parcels[0].area} SQ.METRES",
+                                      origin=f"ORIGIN :- {self.origin.upper()}")
 
     def draw(self):
         # Draw elements
         self.draw_beacons()
         self.draw_parcels()
         self.draw_frames()
-        self.draw_title()
+        self.draw_title_block()
 
     def save_dxf(self, file_path: str):
         self._drawer.save_dxf(file_path)
