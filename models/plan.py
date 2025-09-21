@@ -112,7 +112,7 @@ class PlanProps(BaseModel):
     topographic_setting: Optional[TopographicSettingProps] = None
     topographic_boundary: Optional[TopographicBoundaryProps] = None
     footers: List[str] = []
-    footer_scale: float = 0.5
+    footer_size: float = 0.5
 
     def get_drawing_scale(self):
         if not self.scale:

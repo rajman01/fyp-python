@@ -251,7 +251,7 @@ class TopographicPlan(PlanProps):
             x2 = x1 + box_width
             y1 = y_min
             y2 = y1 + box_height
-            self._drawer.draw_footer_box(html_to_mtext(footer), x1, y1, x2, y2, self.footer_scale)
+            self._drawer.draw_footer_box(html_to_mtext(footer), x1, y1, x2, y2, self.footer_size)
 
     def generate_tin_contours(self, smoothing: float = 1.0):
         """
