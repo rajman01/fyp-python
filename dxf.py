@@ -43,15 +43,15 @@ class SurveyDXFManager:
         self.doc.layers.add(name="TITLE_BLOCK", color=colors.BLACK)
         self.doc.layers.add(name="FOOTER", color=colors.BLACK)
         self.doc.layers.add(name="BOUNDARY", color=colors.RED)
-        self.doc.layers.add('CONTOUR_MAJOR', true_color=ezdxf.colors.rgb2int((127, 31, 0)), linetype="CONTINUOUS", lineweight=35)
-        self.doc.layers.add('CONTOUR_MINOR', true_color=ezdxf.colors.rgb2int((127, 31, 0)), linetype="CONTINUOUS",
+        self.doc.layers.add('CONTOUR_MAJOR', true_color=ezdxf.colors.rgb2int((127, 31, 0)), linetype="Continuous", lineweight=35)
+        self.doc.layers.add('CONTOUR_MINOR', true_color=ezdxf.colors.rgb2int((127, 31, 0)), linetype="Continuous",
                             lineweight=18)
         self.doc.layers.add('CONTOUR_LABELS', true_color=ezdxf.colors.rgb2int((127, 31, 0)))
-        self.doc.layers.add('TIN_MESH', color=colors.GRAY, linetype="CONTINUOUS",
+        self.doc.layers.add('TIN_MESH', color=colors.GRAY, linetype="Continuous",
                             lineweight=9)
-        self.doc.layers.add('GRID_MESH', color=colors.LIGHT_GRAY, linetype="DOT",
+        self.doc.layers.add('GRID_MESH', color=colors.LIGHT_GRAY, linetype="Dot",
                             lineweight=9)
-        self.doc.layers.add('SPOT_HEIGHTS', true_color=ezdxf.colors.rgb2int((205, 105, 40)), linetype="CONTINUOUS",
+        self.doc.layers.add('SPOT_HEIGHTS', true_color=ezdxf.colors.rgb2int((205, 105, 40)), linetype="Continuous",
                             lineweight=25)
 
     def setup_beacon_style(self, type_: str = "box", size: float = 1.0):
