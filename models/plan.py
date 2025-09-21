@@ -73,6 +73,7 @@ class TopographicSettingProps(BaseModel):
     boundary_label_scale: float = 1.0
     tin: Optional[bool] = False
     grid: Optional[bool] = False
+    show_mesh: Optional[bool] = False
 
 class TopographicBoundaryProps(BaseModel):
     coordinates: List[CoordinateProps] = []
@@ -135,6 +136,10 @@ class PlanProps(BaseModel):
 
         xs = [p.easting for p in self.coordinates]
         ys = [p.northing for p in self.coordinates]
+
+        if self.type == PlanType.TOPOGRAPHIC and self.topographic_boundary is not None:
+            xs += [p.easting for p in self.topographic_boundary.coordinates]
+            ys += [p.northing for p in self.topographic_boundary.coordinates]
 
         min_x, max_x = min(xs), max(xs)
         min_y, max_y = min(ys), max(ys)

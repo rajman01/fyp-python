@@ -11,6 +11,9 @@ import uuid
 import zipfile
 from upload import upload_file
 from ezdxf import bbox, colors
+import subprocess
+import math
+from typing import List, Tuple, Dict, Optional, Union
 
 
 
@@ -33,27 +36,23 @@ class SurveyDXFManager:
 
     def _setup_layers(self):
         """Setup standard survey layers"""
-        layers = [
-            ('POINTS', 7),  # Black/White
-            ('LINES', 1),  # Red
-            ('LABELS', 7), # Black/White
-            ('GRID', 8),  # Dark gray
-            ('FRAME', 7),  # Black/White
-            ('DIMENSIONS', 4),  # Cyan
-            ('TITLE_BLOCK', 7),  # White
-            ('TRAVERSE', 6),  # Magenta
-            ('SPOT_HEIGHTS', 7),  # Black/White
-            ("FOOTER", 7),  # Black/White
-            ('BOUNDARY', 1),  # Red
-        ]
-
-        for name, color in layers:
-            self.doc.layers.add(name=name, color=color)
-
-        self.doc.layers.new('CONTOURS_MAJOR', dxfattribs={'color': colors.RED})
-        self.doc.layers.new('CONTOURS_MINOR', dxfattribs={'true_color': ezdxf.colors.rgb2int((127, 31, 0))})
-        self.doc.layers.new('CONTOUR_LABELS', dxfattribs={'color': colors.BLACK})
-        # self.doc.layers.new("TIN_TRIANGLES", dxfattribs={'color': colors.CYAN, 'lineweight': 10})
+        self.doc.layers.add(name="BEACONS", color=colors.BLACK)
+        self.doc.layers.add(name="PARCELS", color=colors.RED)
+        self.doc.layers.add(name="LABELS", color=colors.BLACK)
+        self.doc.layers.add(name="FRAME", color=colors.BLACK)
+        self.doc.layers.add(name="TITLE_BLOCK", color=colors.BLACK)
+        self.doc.layers.add(name="FOOTER", color=colors.BLACK)
+        self.doc.layers.add(name="BOUNDARY", color=colors.RED)
+        self.doc.layers.add('CONTOUR_MAJOR', true_color=ezdxf.colors.rgb2int((127, 31, 0)), linetype="CONTINUOUS", lineweight=35)
+        self.doc.layers.add('CONTOUR_MINOR', true_color=ezdxf.colors.rgb2int((127, 31, 0)), linetype="CONTINUOUS",
+                            lineweight=18)
+        self.doc.layers.add('CONTOUR_LABELS', true_color=ezdxf.colors.rgb2int((127, 31, 0)))
+        self.doc.layers.add('TIN_MESH', color=colors.GRAY, linetype="CONTINUOUS",
+                            lineweight=9)
+        self.doc.layers.add('GRID_MESH', color=colors.LIGHT_GRAY, linetype="DOT",
+                            lineweight=9)
+        self.doc.layers.add('SPOT_HEIGHTS', true_color=ezdxf.colors.rgb2int((205, 105, 40)), linetype="CONTINUOUS",
+                            lineweight=25)
 
     def setup_beacon_style(self, type_: str = "box", size: float = 1.0):
         size = size * self.scale
@@ -93,21 +92,149 @@ class SurveyDXFManager:
 
         # Point styles (using blocks)
         block = self.doc.blocks.new(name='TOPO_POINT')
-        if type_ == "cross":
-            # cross only
-            block.add_line((-size, -size), (size, size), dxfattribs={"true_color": ezdxf.colors.rgb2int((205, 105, 40))})  # Green
-            block.add_line((-size, size), (size, -size), dxfattribs={"true_color": ezdxf.colors.rgb2int((205, 105, 40))})
-        else:
-            block.add_line((-size, -size), (size, size), dxfattribs={"true_color": ezdxf.colors.rgb2int((205, 105, 40))})
-            block.add_line((-size, size), (size, -size), dxfattribs={"true_color": ezdxf.colors.rgb2int((205, 105, 40))})
 
+        # cross only
+        block.add_line((-size, -size), (size, size))
+        block.add_line((-size, size), (size, -size))
         block.add_point((0, 0), dxfattribs={"true_color": ezdxf.colors.rgb2int((205, 105, 40))})  # Green
 
-    def setup_graphical_scale_style(self, length: float = 1000):
+    def setup_font(self, font_name: str = "Times New Roman"):
+        # Add a new text style with the specified font
+        self.doc.styles.add('SURVEY_TEXT', font=f'{font_name}.ttf')
+
+    def draw_beacon(self, x: float, y: float, z: float = 0, text_height: float = 1.0, label=None):
+        # Add a beacon point with optional label
+        x = x * self.scale
+        y = y * self.scale
+        z = z * self.scale
+        text_height = text_height * self.scale
+
+        self.msp.add_blockref(
+            'BEACON_POINT',
+            (x, y, z),
+            dxfattribs={'layer': 'BEACONS'}
+        )
+
+        # add label
+        if label is not None:
+            offset = 1 * self.scale
+            self.msp.add_text(
+                label,
+                dxfattribs={
+                    'layer': 'LABELS',
+                    'height': text_height,
+                    'style': 'SURVEY_TEXT'
+                }
+            ).set_placement(
+                (x + offset, y + offset)
+            )
+
+    def add_parcel(self, parcel_id: str, points: List[Tuple[float, float]], label_scale: float = 1.0):
+        """Add a parcel given its ID and list of (x, y) points"""
+        # scale points
+        points = [(x * self.scale, y * self.scale) for x, y, *rest in points]
+        label_scale = label_scale * self.scale
+
+        self.msp.add_lwpolyline(points, close=True, dxfattribs={
+            'layer': 'PARCELS'
+        })
+
+        # Add parcel ID label at centroid
+        if points and parcel_id:
+            centroid_x = sum(p[0] for p in points) / len(points)
+            centroid_y = sum(p[1] for p in points) / len(points)
+            self.msp.add_text(
+                parcel_id,
+                dxfattribs={
+                    'layer': 'LABELS',
+                    'height': label_scale,
+                    'style': 'SURVEY_TEXT',
+                    'color': 2  # Yellow
+                }
+            ).set_placement(
+                (centroid_x, centroid_y),
+                align=TextEntityAlignment.MIDDLE_CENTER
+            )
+
+    def add_boundary(self, points: List[Tuple[float, float]]):
+        """Add a boundaty given its ID and list of (x, y) points"""
+        # scale points
+        points = [(x * self.scale, y * self.scale) for x, y, *rest in points]
+
+        self.msp.add_lwpolyline(points, close=True, dxfattribs={
+            'layer': 'BOUNDARY'
+        })
+
+    def add_text(self, text: str, x: float, y: float, angle: float = 0.0, height: float = 1.0):
+        x = x * self.scale
+        y = y * self.scale
+        height = height * self.scale
+
+        """Add arbitrary text at given coordinates with optional rotation"""
+        text = self.msp.add_text(
+            text,
+            dxfattribs={
+                'layer': 'LABELS',
+                'height': height,
+                'style': 'SURVEY_TEXT',
+                'rotation': angle
+            }
+        ).set_placement(
+            (x , y),
+            align=TextEntityAlignment.MIDDLE_CENTER
+        )
+
+    def draw_north_arrow(self, x: float, y: float, height: float = 100.0):
+        height = height * self.scale
+        x = x * self.scale
+        y = y * self.scale
+
+        # create a block for the north arrow
+        block = self.doc.blocks.new(name='NORTH_ARROW')
+
+        arrow_size = height * 0.4
+        bulge = math.tan(math.radians(250) / 4) * -1
+        block.add_lwpolyline(
+            [(0, 0), (0, height), (-arrow_size / 2, height - arrow_size, bulge), (-arrow_size / 2, height - (arrow_size * 2))],
+            format='xyb', dxfattribs={'color': 5}
+        )
+
+        # add text above arrow
+        block.add_text(
+            "U",
+            dxfattribs={
+                'height': height * 0.2,
+                'color': 5,
+            }
+        ).set_placement(
+            ( -height * 0.3, height - (height * 0.25)),
+            align=TextEntityAlignment.MIDDLE_CENTER
+        )
+
+        block.add_text(
+            "N",
+            dxfattribs={
+                'height': height * 0.2,
+                'color': 5,
+            }
+        ).set_placement(
+            (height * 0.2, height - (height * 0.25)),
+            align=TextEntityAlignment.MIDDLE_CENTER
+        )
+
+        # add to modelspace
+        self.msp.add_blockref(
+            'NORTH_ARROW',
+            (x, y),
+        )
+
+    def draw_graphical_scale(self, x: float, y: float, length: float = 1000.0):
+        X = x * self.scale
+        Y = y * self.scale
         length = length * self.scale
         height = length * 0.05  # 5% of length
 
-        interval = length / 5 # 5 intervals
+        interval = length / 5  # 5 intervals
 
         # Create a block for the graphical scale
         block = self.doc.blocks.new(name='GRAPHICAL_SCALE')
@@ -148,7 +275,6 @@ class SurveyDXFManager:
                 text = f"{int((i - 1) * text_interval)} Meters"
                 alignment = TextEntityAlignment.TOP_LEFT
 
-
             # add text above line
             block.add_text(
                 text,
@@ -162,7 +288,6 @@ class SurveyDXFManager:
                 align=alignment
             )
 
-
             if i == 5:
                 continue
 
@@ -173,107 +298,32 @@ class SurveyDXFManager:
                     if to_shade == "up":
                         # shade first upper half
                         hatch = block.add_hatch(color=7)
-                        hatch.paths.add_polyline_path([(mini_x, height / 2), (mini_x + mini_interval, height / 2), (mini_x + mini_interval, height), (mini_x, height)])
+                        hatch.paths.add_polyline_path([(mini_x, height / 2), (mini_x + mini_interval, height / 2),
+                                                       (mini_x + mini_interval, height), (mini_x, height)])
                         to_shade = "down"
                     else:
                         # shade lower half
                         hatch = block.add_hatch(color=7)
-                        hatch.paths.add_polyline_path([(mini_x, 0), (mini_x + mini_interval, 0), (mini_x + mini_interval, height / 2), (mini_x, height / 2)])
+                        hatch.paths.add_polyline_path(
+                            [(mini_x, 0), (mini_x + mini_interval, 0), (mini_x + mini_interval, height / 2),
+                             (mini_x, height / 2)])
                         to_shade = "up"
             else:
                 if to_shade == "up":
                     hatch = block.add_hatch(color=7)
-                    hatch.paths.add_polyline_path([(x, height / 2), (x + interval, height / 2), (x + interval, height), (x, height)])
+                    hatch.paths.add_polyline_path(
+                        [(x, height / 2), (x + interval, height / 2), (x + interval, height), (x, height)])
                     to_shade = "down"
                 else:
                     hatch = block.add_hatch(color=7)
-                    hatch.paths.add_polyline_path([(x, 0), (x + interval, 0), (x + interval, height / 2), (x, height / 2)])
+                    hatch.paths.add_polyline_path(
+                        [(x, 0), (x + interval, 0), (x + interval, height / 2), (x, height / 2)])
                     to_shade = "up"
 
-    def setup_font(self, font_name: str = "Times New Roman"):
-        # Add a new text style with the specified font
-        self.doc.styles.add('SURVEY_TEXT', font=f'{font_name}.ttf')
-
-    def draw_beacon(self, x: float, y: float, z: float = 0, text_height: float = 1.0, label=None):
-        # Add a beacon point with optional label
-        x = x * self.scale
-        y = y * self.scale
-        z = z * self.scale
-        text_height = text_height * self.scale
-
-        self.msp.add_blockref(
-            'BEACON_POINT',
-            (x, y, z),
-            dxfattribs={'layer': 'POINTS'}
-        )
-
-        # add label
-        if label is not None:
-            offset = 1 * self.scale
-            self.msp.add_text(
-                label,
-                dxfattribs={
-                    'layer': 'LABELS',
-                    'height': text_height,
-                    'style': 'SURVEY_TEXT'
-                }
-            ).set_placement(
-                (x + offset, y + offset)
-            )
-
-    def add_parcel(self, parcel_id: str, points: list, label_scale: float = 1.0):
-        """Add a parcel given its ID and list of (x, y) points"""
-        # scale points
-        points = [(x * self.scale, y * self.scale) for x, y, *rest in points]
-        label_scale = label_scale * self.scale
-
-        self.msp.add_lwpolyline(points, close=True, dxfattribs={
-            'layer': 'LINES'
-        })
-
-        # Add parcel ID label at centroid
-        if points and parcel_id:
-            centroid_x = sum(p[0] for p in points) / len(points)
-            centroid_y = sum(p[1] for p in points) / len(points)
-            self.msp.add_text(
-                parcel_id,
-                dxfattribs={
-                    'layer': 'LABELS',
-                    'height': label_scale,
-                    'style': 'SURVEY_TEXT',
-                    'color': 2  # Yellow
-                }
-            ).set_placement(
-                (centroid_x, centroid_y),
-                align=TextEntityAlignment.MIDDLE_CENTER
-            )
-
-    def add_boundary(self, points: list):
-        """Add a boundaty given its ID and list of (x, y) points"""
-        # scale points
-        points = [(x * self.scale, y * self.scale) for x, y, *rest in points]
-
-        self.msp.add_lwpolyline(points, close=True, dxfattribs={
-            'layer': 'BOUNDARY'
-        })
-
-    def add_text(self, text: str, x: float, y: float, angle: float = 0.0, height: float = 1.0):
-        x = x * self.scale
-        y = y * self.scale
-        height = height * self.scale
-
-        """Add arbitrary text at given coordinates with optional rotation"""
-        text = self.msp.add_text(
-            text,
-            dxfattribs={
-                'layer': 'LABELS',
-                'height': height,
-                'style': 'SURVEY_TEXT',
-                'rotation': angle
-            }
-        ).set_placement(
-            (x , y),
-            align=TextEntityAlignment.MIDDLE_CENTER
+        return self.msp.add_blockref(
+            'GRAPHICAL_SCALE',
+            (X, Y),
+            dxfattribs={'layer': 'TITLE_BLOCK'}
         )
 
     def draw_title_block(self, text: str, x: float, y: float, width: float, title_height: float = 1.0, graphical_scale_length: float = 1000.0, origin: str = "", area: str = ""):
@@ -307,13 +357,8 @@ class SurveyDXFManager:
         title_length = title_max_x - title_min_x
         graphical_x = title_min_x + ((title_length / 2) - (graphical_scale_length / 2))
 
-        # add graphical scale below title
-        graphical_ref = self.msp.add_blockref(
-            'GRAPHICAL_SCALE',
-            (graphical_x, title_min_y - (graphical_scale_length * 0.05 * 3)),
-            dxfattribs={'layer': 'TITLE_BLOCK'}
-        )
-
+        # draw graphical scale below title
+        graphical_ref = self.draw_graphical_scale(graphical_x / self.scale, (title_min_y - (graphical_scale_length * 0.05 * 3)) / self.scale, graphical_scale_length / self.scale)
         graphical_box = bbox.extents(graphical_ref.virtual_entities())
         graphical_min_y = graphical_box.extmin.y
 
@@ -324,7 +369,7 @@ class SurveyDXFManager:
         origin_mtext.dxf.attachment_point = ezdxf.enums.MTextEntityAlignment.TOP_CENTER
         origin_mtext.dxf.char_height = title_height
         origin_mtext.dxf.width = width
-        origin_mtext.set_location((x, graphical_min_y - (1 * self.scale)))
+        origin_mtext.set_location((x, graphical_min_y - ((graphical_scale_length * 0.05) / 3)))
 
     def draw_footer_box(self, text: str, min_x, min_y, max_x, max_y, font_size: float = 1.0):
         font_size = font_size * self.scale
@@ -389,7 +434,7 @@ class SurveyDXFManager:
 
         # add label
         if label is not None:
-            offset = 0.5 * self.scale
+            offset = 0.25 * text_height
             self.msp.add_text(
                 label,
                 dxfattribs={
@@ -401,6 +446,96 @@ class SurveyDXFManager:
             ).set_placement(
                 (x + offset, y + offset, z + offset)
             )
+
+    def add_tin_mesh(self, points: List[Tuple[float, float, float]]):
+        points = [(x * self.scale, y * self.scale, z * self.scale) for x, y, z in points]
+
+        # Add as 3D polyline
+        self.msp.add_polyline3d(
+            points,
+            dxfattribs={'layer': 'TIN_MESH'}
+        )
+
+    def add_grid_mesh(self, points: List[Tuple[float, float, float]]):
+        points = [(x * self.scale, y * self.scale, z * self.scale) for x, y, z in points]
+
+        # Add as 3D polyline
+        self.msp.add_polyline3d(
+            points,
+            dxfattribs={'layer': 'GRID_MESH'}
+        )
+
+    def add_grid_mesh_label(self, x: float, y: float, z: float, label: str, text_height: float = 1.0, rotation: float = 0.0):
+        x = x * self.scale
+        y = y * self.scale
+        z = z * self.scale
+        text_height = text_height * self.scale
+
+        self.msp.add_text(label, dxfattribs={
+            "layer": "GRID_MESH",
+            "height": text_height,
+            "style": "Standard",
+            "rotation": rotation
+        }).set_placement((x, y, z),)
+
+    def add_grid_mesh_border(self, points: List[Tuple[float, float, float]]):
+        points = [(x * self.scale, y * self.scale, z * self.scale) for x, y, z in points]
+
+        self.msp.add_polyline3d(
+            points,
+            dxfattribs={
+                'layer': 'GRID_MESH',
+                'lineweight': 25  # Slightly thicker for border
+            }
+        )
+
+    def add_grid_mesh_corner_coords(self, x: float, y: float, z: float, label: str, text_height: float = 1.0, rotation: float = 0.0):
+        x = x * self.scale
+        y = y * self.scale
+        z = z * self.scale
+        text_height = text_height * self.scale
+
+        self.msp.add_text(label, dxfattribs={
+            "layer": "GRID_MESH",
+            "height": text_height,
+            "style": "Standard",
+            "rotation": rotation
+        }).set_placement((x, y, z),)
+
+    def add_3d_contour(self, points: List[Tuple[float, float, float]], layer = "CONTOUR_MINOR"):
+        points = [(x * self.scale, y * self.scale, z * self.scale) for x, y, z in points]
+
+        # Add as 3D polyline
+        self.msp.add_polyline3d(
+            points,
+            dxfattribs={'layer': layer}
+        )
+
+    def add_contour_label(self, x: float, y: float, z: float, label: str, text_height: float = 1.0):
+        x = x * self.scale
+        y = y * self.scale
+        z = z * self.scale
+        text_height = text_height * self.scale
+
+        self.msp.add_text(label, dxfattribs={
+            "layer": "CONTOUR_LABELS",
+            "height": text_height,
+        }).set_placement((x, y, z), align=TextEntityAlignment.MIDDLE_CENTER)
+
+    def add_spline(self, points: List[Tuple[float, float, float]], layer="CONTOUR_MINOR"):
+        points = [(x * self.scale, y * self.scale, z * self.scale) for x, y, z in points]
+
+        # Add as 3D polyline
+        self.msp.add_spline(
+            points,
+            degree=3,
+            dxfattribs={'layer': layer}
+        )
+
+    def toggle_layer(self, layer: str, state: bool):
+        """Toggle the visibility of a layer"""
+        layer_ = self.doc.layers.get(layer)
+        layer_.off() if state is False else layer_.on()
 
     def get_filename(self):
         plan_name = self.plan_name.lower()
@@ -461,10 +596,10 @@ class SurveyDXFManager:
     def save(self, paper_size: str = "A4", orientation: str = "portrait"):
         with tempfile.TemporaryDirectory() as tmpdir:
             filename = self.get_filename()
-            dxf_path = os.path.join("", f"{filename}.dxf")
+            dxf_path = os.path.join(tmpdir, f"{filename}.dxf")
             dwg_path =  os.path.join(tmpdir, f"{filename}.dwg")
-            pdf_path =  os.path.join("", f"{filename}.pdf")
-            zip_path = os.path.join("", f"{filename}.zip")
+            pdf_path =  os.path.join(tmpdir, f"{filename}.pdf")
+            zip_path = os.path.join(tmpdir, f"{filename}.zip")
 
             self.save_dxf(dxf_path)
             self.save_dwg(dxf_path, dwg_path)
@@ -480,46 +615,6 @@ class SurveyDXFManager:
             if url is None:
                 raise Exception("Upload failed")
             return url
-
-    # def add_topo_point(self, x: float, y: float, z: float, label: str = None, text_height: float = 1.0):
-    #     self.msp.add_blockref(
-    #         'TOPO_POINT',
-    #         (x * self.scale, y * self.scale, z * self.scale),
-    #         dxfattribs={'layer': 'SPOT_HEIGHTS'}
-    #     )
-    #
-    #     # add label
-    #     if label is not None:
-    #         self.msp.add_text(
-    #             label,
-    #             dxfattribs={
-    #                 'layer': 'LABELS',
-    #                 'height': text_height * self.scale,
-    #                 'style': 'SURVEY_TEXT'
-    #             }
-    #         ).set_placement(
-    #             (x * self.scale + 1, y * self.scale + 1)
-    #         )
-
-    # def setup_topo_point_style(self, type_: str = "dot", size: float = 1.0):
-    #     block = self.doc.blocks.new("TOPO_POINT")
-    #
-    #     if type_ == "dot":
-    #         # just a dot
-    #         block.add_circle((0, 0), radius=size * 0.1, dxfattribs={'color': 3})  # Green
-    #     elif type_ == "circle":
-    #         # circle with cross
-    #         block.add_circle((0, 0), radius=size * 0.2, dxfattribs={'color': 3})
-    #         block.add_line((-size * 0.2, 0), (size * 0.2, 0), dxfattribs={'color': 3})
-    #         block.add_line((0, -size * 0.2), (0, size * 0.2), dxfattribs={'color': 3})
-    #     else:
-    #         # cross only
-    #         block.add_line((-size * 0.2, 0), (size * 0.2, 0), dxfattribs={'color': 3})
-    #         block.add_line((0, -size * 0.2), (0, size * 0.2), dxfattribs={'color': 3})
-    #
-    #     # Add a point entity at the center for snapping
-    #     block.add_point((0, 0), dxfattribs={'color': 3})  # Green
-
 
 
 

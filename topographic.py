@@ -2,15 +2,15 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from ezdxf.enums import TextEntityAlignment
 from pydantic import PrivateAttr
 from dxf import SurveyDXFManager
 from models.plan import PlanProps, PlanType
 from utils import polygon_orientation, line_normals, line_direction, html_to_mtext
-from scipy.interpolate import griddata, RBFInterpolator
+from scipy.interpolate import griddata, LinearNDInterpolator
 from scipy.ndimage import gaussian_filter
+from scipy.spatial import Delaunay
 from scipy.spatial.distance import cdist
-from matplotlib.tri import Triangulation
+from typing import List, Tuple, Dict, Optional, Union
 
 import math
 import numpy as np
@@ -18,18 +18,18 @@ import numpy as np
 
 def apply_minimum_distance_filter(coordinates, min_distance):
     """
-    Filter contour points to maintain minimum distance between points
+    Filter contour points to maintain the minimum distance between points
     """
     if len(coordinates) < 3 or min_distance <= 0:
         return coordinates
 
-    filtered_coords = [coordinates[0]]  # Always keep first point
+    filtered_coords = [coordinates[0]]  # Always keep the first point
 
     for i in range(1, len(coordinates)):
         current_point = coordinates[i]
         last_kept_point = filtered_coords[-1]
 
-        # Calculate distance to last kept point
+        # Calculate distance to the last kept point
         distance = np.sqrt((current_point[0] - last_kept_point[0]) ** 2 +
                            (current_point[1] - last_kept_point[1]) ** 2)
 
@@ -70,14 +70,22 @@ class TopographicPlan(PlanProps):
         self._frame_coords = self._setup_frame_coords()
         if not self._frame_coords:
             raise ValueError("Cannot determine frame coordinates without valid coordinates.")
+
+        # Extract coordinates
+        self._points = self._setup_topo_points()
+        if self._points is None:
+            raise ValueError("Cannot determine topographic points without valid coordinates.")
+        self._x = self._points[:, 0]
+        self._y = self._points[:, 1]
+        self._z = self._points[:, 2]
+
         self._drawer = self._setup_drawer()
 
     def _setup_drawer(self) -> SurveyDXFManager:
         drawer = SurveyDXFManager(plan_name=self.name, scale=self.get_drawing_scale())
         drawer.setup_font(self.font)
         drawer.setup_beacon_style(self.beacon_type, self.beacon_size)
-        drawer.setup_topo_point_style(type_="cross", size=0.1 * self.topographic_setting.point_label_scale)
-        drawer.setup_graphical_scale_style(length=(self._frame_coords[2] - self._frame_coords[0]) * 0.4)
+        drawer.setup_topo_point_style(type_="cross", size=0.5 * self.topographic_setting.point_label_scale)
         return drawer
 
     def _setup_frame_coords(self):
@@ -97,6 +105,14 @@ class TopographicPlan(PlanProps):
         frame_top = max_y + margin_y
 
         return frame_left, frame_bottom, frame_right, frame_top
+
+    def _setup_topo_points(self):
+        if not self.coordinates:
+            return None
+
+        # list of tuples
+        pts = [(coord.easting, coord.northing, coord.elevation) for coord in self.coordinates]
+        return np.array(pts)
 
     def draw_beacons(self):
         if not self.topographic_boundary:
@@ -124,7 +140,8 @@ class TopographicPlan(PlanProps):
         if not boundary_points:
             return
 
-        self._drawer.add_boundary(boundary_points)
+        (self._drawer.
+         add_boundary(boundary_points))
         orientation = polygon_orientation(boundary_points)
 
         for leg in self.topographic_boundary.legs:
@@ -236,152 +253,305 @@ class TopographicPlan(PlanProps):
             y2 = y1 + box_height
             self._drawer.draw_footer_box(html_to_mtext(footer), x1, y1, x2, y2, self.footer_scale)
 
-    def draw_contours(self):
-        if not self.coordinates:
-            return
+    def generate_tin_contours(self, smoothing: float = 1.0):
+        """
+                Generate contours using the Triangulated Irregular Network (TIN) method
 
-        no_of_coordinates = len(self.coordinates)
+                Args:
+                    smoothing: Smoothing factor for contours (0-3)
+                    show_mesh: Whether to add TIN mesh to drawing
 
-        if no_of_coordinates < 3:
-            return
+                Returns:
+                    Dictionary with contour data and statistics
+        """
 
-        x, y, z = np.array([]), np.array([]), np.array([])
+        # Create Delaunay triangulation
+        tri = Delaunay(np.column_stack([self._x, self._y]))
 
-        for coord in self.coordinates:
-            x = np.append(x, coord.easting)
-            y = np.append(y, coord.northing)
-            z = np.append(z, coord.elevation)
+        # Add TIN mesh
+        self._add_tin_mesh(tri)
 
-        from scipy.spatial import Delaunay
-        points = np.column_stack((x, y))
-        tri = Delaunay(points)
+        # Create interpolator
+        interpolator = LinearNDInterpolator(tri, self._z)
 
-        centroids = []
-        centroid_elevations = []
+        # Generate grid for contouring
+        grid_x, grid_y, grid_z = self._create_interpolation_grid(interpolator)
 
-        for simplex in tri.simplices:
-            triangle_points = points[simplex]
-            triangle_z = z[simplex]
+        # Apply smoothing if requested
+        if smoothing > 0:
+            grid_z = gaussian_filter(grid_z, sigma=smoothing)
 
-            centroid = np.mean(triangle_points, axis=0)
-            centroid_z = np.mean(triangle_z)
+        # Generate contours
+        self._generate_contours(grid_x, grid_y, grid_z)
 
-            centroids.append(centroid)
-            centroid_elevations.append(centroid_z)
+    def generate_grid_contours(self, grid_size: float = 100.0, smoothing: float  = 1.0):
+        """
+              Generate contours using the grid interpolation method
 
-        Xi = np.concatenate([x, [c[0] for c in centroids]])
-        Yi = np.concatenate([y, [c[1] for c in centroids]])
-        Zi = np.concatenate([z, centroid_elevations])
+              Args:
+                  method: Interpolation method ('linear', 'cubic', 'nearest')
+                  grid_size: Number of grid points in each direction
+                  smoothing: Smoothing factor for contours (0-3)
+                  show_mesh: Whether to add grid mesh to drawing
 
-        """Generate smooth contours using grid interpolation"""
-        x_min, x_max = x.min(), x.max()
-        y_min, y_max = y.min(), y.max()
-        z_min, z_max = z.min(), z.max()
+              Returns:
+                  Dictionary with contour data and statistics
+              """
 
-        # Add padding to avoid edge effects
-        # padding = 0.1
-        # x_range = x_max - x_min
-        # y_range = y_max - y_min
-        #
-        # # calculate area
-        # area = (x_max - x_min) * (y_max - y_min)
+        # Create regular grid
+        xi = np.linspace(self._x.min(), self._x.max(), grid_size)
+        yi = np.linspace(self._y.min(), self._y.max(), grid_size)
+        grid_x, grid_y = np.meshgrid(xi, yi)
 
-        # calculate grid resolution
-        # grid_resolution = 100  # default
-        # if area > 0:
-        #     # Base resolution on survey area and point density
-        #     point_density = no_of_coordinates / area  # points per square unit
-        #     grid_resolution = max(50, min(200, int(np.sqrt(area) * point_density * 0.5)))
-        #
-        # xi = np.linspace(x_min - padding * x_range, x_max + padding * x_range, grid_resolution)
-        # yi = np.linspace(y_min - padding * y_range, y_max + padding * y_range, grid_resolution)
-        # Xi, Yi = np.meshgrid(xi, yi)
-
-        # Interpolate elevations
-        # Zi = griddata((x, y), z, (Xi, Yi), method='cubic', fill_value=np.nan)
+        # Interpolate to grid
+        grid_z = griddata(
+            np.column_stack([self._x, self._y]),
+            self._z,
+            (grid_x, grid_y),
+            method="cubic"
+        )
 
         # Apply smoothing
-        # smoothing = 1.2
-        # if smoothing > 0:
-        #     Zi = gaussian_filter(Zi, sigma=smoothing)
-        #     print(f"Applied smoothing (factor: {smoothing})")
+        if smoothing > 0:
+            grid_z = gaussian_filter(grid_z, sigma=smoothing)
 
-        # Start from the first multiple of contour_interval above z_min
-        start_elevation = np.ceil(z_min / self.topographic_setting.contour_interval) * self.topographic_setting.contour_interval
-        end_elevation = np.floor(z_max / self.topographic_setting.contour_interval) * self.topographic_setting.contour_interval
+        # Add grid mesh
+        self._add_grid_mesh(grid_x, grid_y, grid_z)
 
-        # generate levels
-        num_levels = int((end_elevation - start_elevation) / self.topographic_setting.contour_interval) + 1
-        levels = np.linspace(start_elevation, end_elevation, num_levels)
+        # Generate contours
+        self._generate_contours(grid_x, grid_y, grid_z)
 
-        # Identify major contour levels
-        major_levels = []
-        for level in levels:
-            if abs(level % self.topographic_setting.major_contour) < 0.001:  # Account for floating point precision
-                major_levels.append(level)
+    def _add_tin_mesh(self, tri: Delaunay):
+        """Add TIN mesh to the drawing"""
+        for simplex in tri.simplices:
+            # Get triangle vertices
+            triangle_points = []
+            for vertex_idx in simplex:
+                point = self._points[vertex_idx]
+                triangle_points.append(point)
 
-        # Draw contours
-        triangulation = Triangulation(Xi, Yi)
-        fig, ax = plt.subplots(figsize=(1, 1))
-        contours = ax.tricontour(triangulation, Zi, levels=levels)
+            # Close the triangle
+            triangle_points.append(triangle_points[0])
 
-        contour_data = []
-        points_filtered = 0
+            # Add as 3D polyline
+            self._drawer.add_tin_mesh(triangle_points)
 
-        if hasattr(contours, 'allsegs') and len(contours.allsegs) > 0:
-            for level_idx, level_segments in enumerate(contours.allsegs):
-                elevation = levels[level_idx]
-                is_major = elevation in major_levels
-                layer_name = 'CONTOURS_MAJOR' if is_major else 'CONTOURS_MINOR'
+    # def _add_grid_mesh(self, grid_x, grid_y, grid_z, step: int = 5):
+    #     """Add grid mesh to the drawing"""
+    #     # Add horizontal grid lines
+    #     for i in range(0, grid_x.shape[0], step):
+    #         points = []
+    #         for j in range(grid_x.shape[1]):
+    #             if not np.isnan(grid_z[i, j]):
+    #                 points.append((grid_x[i, j], grid_y[i, j], grid_z[i, j]))
+    #
+    #         if len(points) > 1:
+    #             self._drawer.add_grid_mesh(points)
+    #
+    #     # Add vertical grid lines
+    #     for j in range(0, grid_x.shape[1], step):
+    #         points = []
+    #         for i in range(grid_x.shape[0]):
+    #             if not np.isnan(grid_z[i, j]):
+    #                 points.append((grid_x[i, j], grid_y[i, j], grid_z[i, j]))
+    #
+    #         if len(points) > 1:
+    #             self._drawer.add_grid_mesh(points)
 
-                for segment in level_segments:
-                    if len(segment) < 2:
-                        continue
+    def _add_grid_mesh(self, grid_x, grid_y, grid_z, step: int = 5, elevation: Optional[float] = None):
+        """Add rectangular grid mesh with easting and northing labels
 
-                    # Apply minimum distance filter
-                    original_points = len(segment)
-                    filtered_segment = apply_minimum_distance_filter(segment, self.topographic_setting.minimum_distance)
-                    points_filtered += original_points - len(filtered_segment)
+              Args:
+                  grid_x: X coordinates grid
+                  grid_y: Y coordinates grid
+                  grid_z: Z coordinates grid
+                  step: Step size for grid lines
+                  elevation: Fixed elevation for grid (None = use average elevation)
+              """
+        # Get grid bounds
+        x_min, x_max = grid_x.min(), grid_x.max()
+        y_min, y_max = grid_y.min(), grid_y.max()
 
-                    if len(filtered_segment) < 2:
-                        continue
+        # Determine grid elevation
+        if elevation is None:
+            z_grid = np.nanmean(grid_z)  # Use average elevation
+        else:
+            z_grid = elevation
 
-                    points = [(float(x), float(y), float(elevation)) for x, y in filtered_segment]
+        # Calculate grid line positions
+        x_lines = np.arange(0, grid_x.shape[1], step)
+        y_lines = np.arange(0, grid_x.shape[0], step)
 
-                    # Add polyline to DXF
-                    polyline = self._drawer.msp.add_polyline3d(
-                        points,
-                        dxfattribs={'layer': layer_name}
-                    )
+        # Add horizontal grid lines (constant northing)
+        for i in y_lines:
+            northing = grid_y[i, 0]
 
-                    # Add elevation labels for major contours
-                    if is_major and len(points) >= 3:
-                        mid_idx = len(points) // 2
-                        label_x, label_y, _ = points[mid_idx]
+            # Create a full horizontal line across the grid
+            points = [
+                (x_min, northing, z_grid),
+                (x_max, northing, z_grid)
+            ]
 
-                        text_height = self.topographic_setting.contour_label_scale
+            self._drawer.add_grid_mesh(points)
 
-                        self._drawer.msp.add_text(
-                            f"{elevation:.1f}",
-                            dxfattribs={
-                                'layer': 'CONTOUR_LABELS',
-                                'height': text_height,
-                                'style': 'Standard'
-                            }
-                        ).set_placement((label_x, label_y), align=TextEntityAlignment.MIDDLE_CENTER)
+            # Add northing label at the left edge
+            self._drawer.add_grid_mesh_label(x_min - 2, northing, z_grid, f'N: {northing:.2f}', 2, rotation=0)
 
-        # plt.close(fig)
+            # Add northing label at the right edge (optional)
+            self._drawer.add_grid_mesh_label(x_max + 1, northing, z_grid, f'{northing:.2f}', 2, rotation=0)
+
+        # Add vertical grid lines (constant easting)
+        for j in x_lines:
+            easting = grid_x[0, j]
+
+            # Create a full vertical line across the grid
+            points = [
+                (easting, y_min, z_grid),
+                (easting, y_max, z_grid)
+            ]
+
+            self._drawer.add_grid_mesh(points)
+
+            # Add an easting label at the bottom edge
+            self._drawer.add_grid_mesh_label(easting, y_min - 2, z_grid, f'E: {easting:.2f}', 2, rotation=90)
+
+            # Add an easting label at the top edge (optional)
+            self._drawer.add_grid_mesh_label(easting, y_max + 1, z_grid,  f'{easting:.2f}', 2, rotation=90)
+
+        # Add border rectangle
+        border_points = [
+            (x_min, y_min, z_grid),
+            (x_max, y_min, z_grid),
+            (x_max, y_max, z_grid),
+            (x_min, y_max, z_grid),
+            (x_min, y_min, z_grid)  # Close the rectangle
+        ]
+
+        self._drawer.add_grid_mesh_border(border_points)
+
+        # Add corner coordinate labels
+        corners = [
+            (x_min, y_min, f"({x_min:.1f}, {y_min:.1f})"),
+            (x_max, y_min, f"({x_max:.1f}, {y_min:.1f})"),
+            (x_max, y_max, f"({x_max:.1f}, {y_max:.1f})"),
+            (x_min, y_max, f"({x_min:.1f}, {y_max:.1f})")
+        ]
+
+        for x, y, label in corners:
+            self._drawer.add_grid_mesh_corner_coords(x, y, z_grid, label, 2, 0)
+
+    def _create_interpolation_grid(self, interpolator, grid_size: int = 100):
+        """Create interpolation grid for TIN method"""
+        xi = np.linspace(self._x.min(), self._x.max(), grid_size)
+        yi = np.linspace(self._y.min(), self._y.max(), grid_size)
+        grid_x, grid_y = np.meshgrid(xi, yi)
+
+        # Flatten for interpolation
+        points = np.column_stack([grid_x.ravel(), grid_y.ravel()])
+        grid_z = interpolator(points).reshape(grid_x.shape)
+
+        # Handle NaN values
+        if np.any(np.isnan(grid_z)):
+            grid_z_nearest = griddata(
+                np.column_stack([self._x, self._y]),
+                self._z,
+                (grid_x, grid_y),
+                method='nearest'
+            )
+            grid_z[np.isnan(grid_z)] = grid_z_nearest[np.isnan(grid_z)]
+
+        return grid_x, grid_y, grid_z
+
+    def _generate_contours(self, grid_x, grid_y, grid_z):
+        """Generate contour lines from gridded data"""
+        # Calculate contour levels
+        z_min, z_max = np.nanmin(grid_z), np.nanmax(grid_z)
+        levels = np.arange(
+            np.floor(z_min / self.topographic_setting.contour_interval) * self.topographic_setting.contour_interval,
+            np.ceil(z_max / self.topographic_setting.contour_interval) * self.topographic_setting.contour_interval + self.topographic_setting.contour_interval,
+            self.topographic_setting.contour_interval
+        )
+
+        # Generate contours using matplotlib
+        fig, ax = plt.subplots(figsize=(10, 10))
+        cs = ax.contour(grid_x, grid_y, grid_z, levels=levels)
+        plt.close(fig)
+
+        # Extract contour paths and add to DXF as smooth 3D polylines
+        for level_idx, level in enumerate(cs.levels):
+            is_major = abs(level % self.topographic_setting.major_contour) < 0.001
+            layer = 'CONTOUR_MAJOR' if is_major else 'CONTOUR_MINOR'
+
+            # Get all paths for this level
+            paths = cs.allsegs[level_idx]
+
+            for path in paths:
+                if len(path) > 2:
+                    # Convert to 3D points (add Z coordinate)
+                    points_3d = [(p[0], p[1], level) for p in path]
+
+                    # Create smooth 3D polyline using spline
+                    self._add_smooth_3d_polyline(points_3d, layer)
+
+                    # Add elevation label for major contours
+                    # if is_major and len(path) > 10:
+                    if is_major:
+                        mid_idx = len(path) // 2
+                        self._add_contour_label(float(path[mid_idx][0]), float(path[mid_idx][1]), level)
+
+    def _add_smooth_3d_polyline(self, points: List[Tuple[float, float, float]],
+                                layer: str):
+        """Add a smooth 3D polyline using B-spline"""
+        if len(points) < 4:
+            # For short segments, use a simple polyline
+            self._drawer.add_3d_contour(points, layer)
+        else:
+            # Create B-spline for smooth curves
+            try:
+                self._drawer.add_spline(points, layer)
+            except:
+                # Fallback to polyline if spline fails
+                self._drawer.add_3d_contour(points, layer)
+
+    def _add_contour_label(self, x: float, y: float, elevation: float):
+        """Add elevation label to contour"""
+        self._drawer.add_contour_label(
+            x,
+            y,
+            elevation,
+            f"{elevation:.2f}",
+            self.topographic_setting.contour_label_scale
+        )
+
+    def draw_topo_map(self):
+        if self.topographic_setting.tin:
+            self.generate_tin_contours(1.5)
+
+        if self.topographic_setting.grid:
+            self.generate_grid_contours(100, 1.5)
+
+        self._drawer.toggle_layer("SPOT_HEIGHTS", self.topographic_setting.show_spot_heights)
+        self._drawer.toggle_layer("CONTOUR_MAJOR", self.topographic_setting.show_contours)
+        self._drawer.toggle_layer("CONTOUR_MINOR", self.topographic_setting.show_contours)
+        self._drawer.toggle_layer("CONTOUR_LABELS", self.topographic_setting.show_contours_labels)
+        self._drawer.toggle_layer("BOUNDARY", self.topographic_setting.show_boundary)
+
+        if self.topographic_setting.tin:
+            self._drawer.toggle_layer("TIN_MESH", self.topographic_setting.show_mesh)
+
+        if self.topographic_setting.grid:
+            self._drawer.toggle_layer("GRID_MESH", self.topographic_setting.show_mesh)
 
 
     def draw(self):
         # Draw elements
         self.draw_topo_points()
-        # self.draw_beacons()
-        # self.draw_boundary()
-        self.draw_contours()
+        self.draw_beacons()
+        self.draw_boundary()
         self.draw_frames()
         self.draw_title_block()
         self.draw_footer_boxes()
+        self.draw_topo_map()
 
     def save_dxf(self, file_path: str):
         self._drawer.save_dxf(file_path)

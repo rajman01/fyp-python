@@ -17,6 +17,7 @@ class CadastralPlan(PlanProps):
         self._frame_y_percent = 0.8
         self._bounding_box = self.get_bounding_box()
         self._frame_coords = self._setup_frame_coords()
+        self._coord_dict = {coord.id: coord for coord in self.coordinates}
         if not self._frame_coords:
             raise ValueError("Cannot determine frame coordinates without valid coordinates.")
         self._drawer = self._setup_drawer()
@@ -25,7 +26,6 @@ class CadastralPlan(PlanProps):
         drawer = SurveyDXFManager(plan_name=self.name, scale=self.get_drawing_scale())
         drawer.setup_font(self.font)
         drawer.setup_beacon_style(self.beacon_type, self.beacon_size)
-        drawer.setup_graphical_scale_style(length=(self._frame_coords[2] - self._frame_coords[0]) * 0.4)
         return drawer
 
     def _setup_frame_coords(self):
@@ -57,12 +57,9 @@ class CadastralPlan(PlanProps):
         if not self.parcels or not self.coordinates:
             return
 
-        # create a dictionary of coordinates for easy lookup
-        coord_dict = {coord.id: coord for coord in self.coordinates}
-
         for parcel in self.parcels:
-            parcel_points = [(coord_dict[pid].easting, coord_dict[pid].northing)
-                             for pid in parcel.ids if pid in coord_dict]
+            parcel_points = [(self._coord_dict[pid].easting, self._coord_dict[pid].northing)
+                             for pid in parcel.ids if pid in self._coord_dict]
 
             if not parcel_points:
                 continue
@@ -175,6 +172,19 @@ class CadastralPlan(PlanProps):
             y2 = y1 + box_height
             self._drawer.draw_footer_box(html_to_mtext(footer), x1, y1, x2, y2, self.footer_scale)
 
+    def draw_north_arrow(self):
+        if len(self.parcels) == 0:
+            return
+
+        coord = self._coord_dict[self.parcels[0].ids[0]]
+        height = (self._frame_coords[3] - self._frame_coords[1]) * 0.07
+        self._drawer.draw_north_arrow(coord.easting, self._frame_coords[3] - height, height)
+
+    def draw_starting_point_lines(self):
+        if len(self.parcels) == 0:
+            return
+
+
     def draw(self):
         # Draw elements
         self.draw_beacons()
@@ -182,6 +192,7 @@ class CadastralPlan(PlanProps):
         self.draw_frames()
         self.draw_title_block()
         self.draw_footer_boxes()
+        self.draw_north_arrow()
 
     def save_dxf(self, file_path: str):
         self._drawer.save_dxf(file_path)
