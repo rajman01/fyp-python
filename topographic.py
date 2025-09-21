@@ -122,7 +122,7 @@ class TopographicPlan(PlanProps):
         for coord in self.topographic_boundary.coordinates:
             if coord.id in check:
                 continue
-            self._drawer.draw_beacon(coord.easting, coord.northing, 0, self.label_scale, coord.id)
+            self._drawer.draw_beacon(coord.easting, coord.northing, 0, self.label_size, coord.id)
             check.append(coord.id)
 
     def draw_topo_points(self):
@@ -184,18 +184,18 @@ class TopographicPlan(PlanProps):
 
         # Add labels
         self._drawer.add_text(f"{leg.distance:.2f} m", mid_x, mid_y,
-                              angle=text_angle, height=self.label_scale)
+                              angle=text_angle, height=self.label_size)
         ld = line_direction(angle_deg)
         if ld == "left → right":
             self._drawer.add_text(f"{leg.bearing.degrees}°", first_x, first_y,
-                                  angle=text_angle, height=self.label_scale)
+                                  angle=text_angle, height=self.label_size)
             self._drawer.add_text(f"{leg.bearing.minutes}'", last_x, last_y,
-                                  angle=text_angle, height=self.label_scale)
+                                  angle=text_angle, height=self.label_size)
         else:
             self._drawer.add_text(f"{leg.bearing.degrees}°", last_x, last_y,
-                                  angle=text_angle, height=self.label_scale)
+                                  angle=text_angle, height=self.label_size)
             self._drawer.add_text(f"{leg.bearing.minutes}'", first_x, first_y,
-                                  angle=text_angle, height=self.label_scale)
+                                  angle=text_angle, height=self.label_size)
 
     def draw_frames(self):
         """Draw outer and offset frames."""

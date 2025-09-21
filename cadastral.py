@@ -51,7 +51,7 @@ class CadastralPlan(PlanProps):
             return
 
         for coord in self.coordinates:
-            self._drawer.draw_beacon(coord.easting, coord.northing, 0, self.label_scale, coord.id)
+            self._drawer.draw_beacon(coord.easting, coord.northing, 0, self.label_size, coord.id)
 
     def draw_parcels(self):
         if not self.parcels or not self.coordinates:
@@ -64,7 +64,7 @@ class CadastralPlan(PlanProps):
             if not parcel_points:
                 continue
 
-            self._drawer.add_parcel(parcel.name, parcel_points, label_scale=self.label_scale)
+            self._drawer.add_parcel(parcel.name, parcel_points, label_size=self.label_size)
             orientation = polygon_orientation(parcel_points)
 
             for leg in parcel.legs:
@@ -104,18 +104,18 @@ class CadastralPlan(PlanProps):
 
         # Add labels
         self._drawer.add_text(f"{leg.distance:.2f} m", mid_x, mid_y,
-                        angle=text_angle, height=self.label_scale)
+                        angle=text_angle, height=self.label_size)
         ld = line_direction(angle_deg)
         if ld == "left → right":
             self._drawer.add_text(f"{leg.bearing.degrees}°", first_x, first_y,
-                            angle=text_angle, height=self.label_scale)
+                            angle=text_angle, height=self.label_size)
             self._drawer.add_text(f"{leg.bearing.minutes}'", last_x, last_y,
-                            angle=text_angle, height=self.label_scale)
+                            angle=text_angle, height=self.label_size)
         else:
             self._drawer.add_text(f"{leg.bearing.degrees}°", last_x, last_y,
-                            angle=text_angle, height=self.label_scale)
+                            angle=text_angle, height=self.label_size)
             self._drawer.add_text(f"{leg.bearing.minutes}'", first_x, first_y,
-                            angle=text_angle, height=self.label_scale)
+                            angle=text_angle, height=self.label_size)
 
     def draw_frames(self):
         """Draw outer and offset frames."""

@@ -104,7 +104,7 @@ class PlanProps(BaseModel):
     scale: float = 1000
     beacon_type: BeaconType = BeaconType.BOX
     beacon_size: float = 0.3
-    label_scale: float = 1.0
+    label_size: float = 1.0
     personel_name: str = ""
     surveyor_name: str = ""
     page_size: PageSize = PageSize.A4

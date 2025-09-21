@@ -129,11 +129,11 @@ class SurveyDXFManager:
                 (x + offset, y + offset)
             )
 
-    def add_parcel(self, parcel_id: str, points: List[Tuple[float, float]], label_scale: float = 1.0):
+    def add_parcel(self, parcel_id: str, points: List[Tuple[float, float]], label_size: float = 1.0):
         """Add a parcel given its ID and list of (x, y) points"""
         # scale points
         points = [(x * self.scale, y * self.scale) for x, y, *rest in points]
-        label_scale = label_scale * self.scale
+        label_size = label_size * self.scale
 
         self.msp.add_lwpolyline(points, close=True, dxfattribs={
             'layer': 'PARCELS'
@@ -147,7 +147,7 @@ class SurveyDXFManager:
                 parcel_id,
                 dxfattribs={
                     'layer': 'LABELS',
-                    'height': label_scale,
+                    'height': label_size,
                     'style': 'SURVEY_TEXT',
                     'color': 2  # Yellow
                 }
