@@ -78,16 +78,16 @@ class CadastralPlan(PlanProps):
         angle_deg = math.degrees(angle_rad)
 
         # Fractional positions
-        first_x = leg.from_.easting + 0.2 * (leg.to.easting - leg.from_.easting)
-        first_y = leg.from_.northing + 0.2 * (leg.to.northing - leg.from_.northing)
-        last_x = leg.from_.easting + 0.8 * (leg.to.easting - leg.from_.easting)
-        last_y = leg.from_.northing + 0.8 * (leg.to.northing - leg.from_.northing)
+        first_x =  leg.from_.easting + (0.2 * (leg.to.easting - leg.from_.easting))
+        first_y = leg.from_.northing + (0.2 * (leg.to.northing - leg.from_.northing))
+        last_x = leg.from_.easting + (0.8 * (leg.to.easting - leg.from_.easting))
+        last_y = leg.from_.northing + (0.8 * (leg.to.northing - leg.from_.northing))
         mid_x = (leg.from_.easting + leg.to.easting) / 2
         mid_y = (leg.from_.northing + leg.to.northing) / 2
 
         # Offset text above/below the line
         normals = line_normals((leg.from_.easting, leg.from_.northing), (leg.to.easting, leg.to.northing), orientation)
-        offset_distance = 1 * self.get_drawing_scale()
+        offset_distance = self.beacon_size * 0.2
         offset_inside_x = (normals[0][0] / math.hypot(*normals[0])) * offset_distance
         offset_inside_y = (normals[0][1] / math.hypot(*normals[0])) * offset_distance
         offset_outside_x = (normals[1][0] / math.hypot(*normals[1])) * offset_distance
