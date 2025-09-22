@@ -26,6 +26,7 @@ class TopographicPlan(PlanProps):
         self._frame_y_percent = 0.8
         self._bounding_box = self.get_bounding_box()
         self._frame_coords = self._setup_frame_coords()
+        self._boundary_dict = {coord.id: coord for coord in self.topographic_boundary.coordinates}
         if not self._frame_coords:
             raise ValueError("Cannot determine frame coordinates without valid coordinates.")
 
@@ -515,7 +516,7 @@ class TopographicPlan(PlanProps):
         if len(self.topographic_boundary.coordinates) == 0:
             return
 
-        coord = self._coord_dict[self.topographic_boundary.coordinates[0].id]
+        coord = self._boundary_dict[self.topographic_boundary.coordinates[0].id]
         height = (self._frame_coords[3] - self._frame_coords[1]) * 0.07
         self._drawer.draw_north_arrow(coord.easting, self._frame_coords[3] - height, height)
 
