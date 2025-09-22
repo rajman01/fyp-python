@@ -117,7 +117,7 @@ class SurveyDXFManager:
 
         # add label
         if label is not None:
-            offset = self.scale * extent * 0.02
+            offset = self.scale * extent * 0.01
             self.msp.add_text(
                 label,
                 dxfattribs={
