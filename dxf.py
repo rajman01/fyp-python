@@ -102,7 +102,7 @@ class SurveyDXFManager:
         # Add a new text style with the specified font
         self.doc.styles.add('SURVEY_TEXT', font=f'{font_name}.ttf')
 
-    def draw_beacon(self, x: float, y: float, z: float = 0, text_height: float = 1.0, label=None):
+    def draw_beacon(self, x: float, y: float, z: float = 0, text_height: float = 1.0, extent: float = 1000, label=None):
         # Add a beacon point with optional label
         x = x * self.scale
         y = y * self.scale
@@ -117,7 +117,7 @@ class SurveyDXFManager:
 
         # add label
         if label is not None:
-            offset = 1 * self.scale
+            offset = self.scale * extent * 0.02
             self.msp.add_text(
                 label,
                 dxfattribs={

@@ -62,7 +62,7 @@ class CadastralPlan(PlanProps):
             return
 
         for coord in self.coordinates:
-            self._drawer.draw_beacon(coord.easting, coord.northing, 0, self.label_size, coord.id)
+            self._drawer.draw_beacon(coord.easting, coord.northing, 0, self.label_size, self._get_drawing_extent(), coord.id)
 
     def draw_parcels(self):
         if not self.parcels or not self.coordinates:

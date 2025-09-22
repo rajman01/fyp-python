@@ -92,7 +92,7 @@ class TopographicPlan(PlanProps):
         for coord in self.topographic_boundary.coordinates:
             if coord.id in check:
                 continue
-            self._drawer.draw_beacon(coord.easting, coord.northing, 0, self.label_size, coord.id)
+            self._drawer.draw_beacon(coord.easting, coord.northing, 0, self.label_size, self._get_drawing_extent(), coord.id)
             check.append(coord.id)
 
     def draw_topo_points(self):
