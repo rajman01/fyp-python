@@ -134,7 +134,7 @@ class TopographicPlan(PlanProps):
 
         # Offset text above/below the line
         normals = line_normals((leg.from_.easting, leg.from_.northing), (leg.to.easting, leg.to.northing), orientation)
-        offset_distance = self._get_drawing_extent() * 0.005
+        offset_distance = self._get_drawing_extent() * 0.02
         offset_inside_x = (normals[0][0] / math.hypot(*normals[0])) * offset_distance
         offset_inside_y = (normals[0][1] / math.hypot(*normals[0])) * offset_distance
         offset_outside_x = (normals[1][0] / math.hypot(*normals[1])) * offset_distance
