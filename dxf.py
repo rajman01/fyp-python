@@ -140,21 +140,21 @@ class SurveyDXFManager:
         })
 
         # Add parcel ID label at centroid
-        if points and parcel_id:
-            centroid_x = sum(p[0] for p in points) / len(points)
-            centroid_y = sum(p[1] for p in points) / len(points)
-            self.msp.add_text(
-                parcel_id,
-                dxfattribs={
-                    'layer': 'LABELS',
-                    'height': label_size,
-                    'style': 'SURVEY_TEXT',
-                    'color': 2  # Yellow
-                }
-            ).set_placement(
-                (centroid_x, centroid_y),
-                align=TextEntityAlignment.MIDDLE_CENTER
-            )
+        # if points and parcel_id:
+        #     centroid_x = sum(p[0] for p in points) / len(points)
+        #     centroid_y = sum(p[1] for p in points) / len(points)
+        #     self.msp.add_text(
+        #         parcel_id,
+        #         dxfattribs={
+        #             'layer': 'LABELS',
+        #             'height': label_size,
+        #             'style': 'SURVEY_TEXT',
+        #             'color': 2  # Yellow
+        #         }
+        #     ).set_placement(
+        #         (centroid_x, centroid_y),
+        #         align=TextEntityAlignment.MIDDLE_CENTER
+        #     )
 
     def add_boundary(self, points: List[Tuple[float, float]]):
         """Add a boundaty given its ID and list of (x, y) points"""
