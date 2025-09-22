@@ -9,52 +9,10 @@ from utils import polygon_orientation, line_normals, line_direction, html_to_mte
 from scipy.interpolate import griddata, LinearNDInterpolator
 from scipy.ndimage import gaussian_filter
 from scipy.spatial import Delaunay
-from scipy.spatial.distance import cdist
-from typing import List, Tuple, Dict, Optional, Union
+from typing import List, Tuple, Optional
 
 import math
 import numpy as np
-
-
-def apply_minimum_distance_filter(coordinates, min_distance):
-    """
-    Filter contour points to maintain the minimum distance between points
-    """
-    if len(coordinates) < 3 or min_distance <= 0:
-        return coordinates
-
-    filtered_coords = [coordinates[0]]  # Always keep the first point
-
-    for i in range(1, len(coordinates)):
-        current_point = coordinates[i]
-        last_kept_point = filtered_coords[-1]
-
-        # Calculate distance to the last kept point
-        distance = np.sqrt((current_point[0] - last_kept_point[0]) ** 2 +
-                           (current_point[1] - last_kept_point[1]) ** 2)
-
-        if distance >= min_distance:
-            filtered_coords.append(current_point)
-
-    # Always keep the last point if it's not already kept
-    if len(filtered_coords) > 1 and not np.array_equal(filtered_coords[-1], coordinates[-1]):
-        filtered_coords.append(coordinates[-1])
-
-    return filtered_coords
-
-def calculate_average_point_spacing(x, y):
-    """Calculate average distance between survey points"""
-    if len(x) < 2:
-        return 0
-
-    points = np.column_stack((x, y))
-    distances = cdist(points, points)
-
-    # Get non-zero distances (exclude self-distances)
-    non_zero_distances = distances[distances > 0]
-
-    return np.mean(non_zero_distances) if len(non_zero_distances) > 0 else 0
-
 
 class TopographicPlan(PlanProps):
     _drawer: SurveyDXFManager = PrivateAttr()
@@ -114,6 +72,17 @@ class TopographicPlan(PlanProps):
         pts = [(coord.easting, coord.northing, coord.elevation) for coord in self.coordinates]
         return np.array(pts)
 
+    def _get_drawing_extent(self) -> float:
+        # get bounding box
+        min_x, min_y, max_x, max_y = self._bounding_box
+        if min_x is None or min_y is None or max_x is None or max_y is None:
+            return 0.0
+
+        width = max_x - min_x
+        height = max_y - min_y
+        extent = math.sqrt(width ** 2 + height ** 2)
+        return extent
+
     def draw_beacons(self):
         if not self.topographic_boundary:
             return
@@ -155,16 +124,16 @@ class TopographicPlan(PlanProps):
         angle_deg = math.degrees(angle_rad)
 
         # Fractional positions
-        first_x = leg.from_.easting + 0.2 * (leg.to.easting - leg.from_.easting)
-        first_y = leg.from_.northing + 0.2 * (leg.to.northing - leg.from_.northing)
-        last_x = leg.from_.easting + 0.8 * (leg.to.easting - leg.from_.easting)
-        last_y = leg.from_.northing + 0.8 * (leg.to.northing - leg.from_.northing)
+        first_x = leg.from_.easting + (0.2 * (leg.to.easting - leg.from_.easting))
+        first_y = leg.from_.northing + (0.2 * (leg.to.northing - leg.from_.northing))
+        last_x = leg.from_.easting + (0.8 * (leg.to.easting - leg.from_.easting))
+        last_y = leg.from_.northing + (0.8 * (leg.to.northing - leg.from_.northing))
         mid_x = (leg.from_.easting + leg.to.easting) / 2
         mid_y = (leg.from_.northing + leg.to.northing) / 2
 
         # Offset text above/below the line
         normals = line_normals((leg.from_.easting, leg.from_.northing), (leg.to.easting, leg.to.northing), orientation)
-        offset_distance = 1 * self.get_drawing_scale()
+        offset_distance = self._get_drawing_extent() * 0.005
         offset_inside_x = (normals[0][0] / math.hypot(*normals[0])) * offset_distance
         offset_inside_y = (normals[0][1] / math.hypot(*normals[0])) * offset_distance
         offset_outside_x = (normals[1][0] / math.hypot(*normals[1])) * offset_distance
@@ -542,16 +511,24 @@ class TopographicPlan(PlanProps):
         if self.topographic_setting.grid:
             self._drawer.toggle_layer("GRID_MESH", self.topographic_setting.show_mesh)
 
+    def draw_north_arrow(self):
+        if len(self.topographic_boundary.coordinates) == 0:
+            return
+
+        coord = self._coord_dict[self.topographic_boundary.coordinates[0].id]
+        height = (self._frame_coords[3] - self._frame_coords[1]) * 0.07
+        self._drawer.draw_north_arrow(coord.easting, self._frame_coords[3] - height, height)
 
     def draw(self):
         # Draw elements
-        self.draw_topo_points()
         self.draw_beacons()
+        self.draw_topo_points()
         self.draw_boundary()
         self.draw_frames()
         self.draw_title_block()
         self.draw_footer_boxes()
         self.draw_topo_map()
+        self.draw_north_arrow()
 
     def save_dxf(self, file_path: str):
         self._drawer.save_dxf(file_path)

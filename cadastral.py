@@ -46,6 +46,17 @@ class CadastralPlan(PlanProps):
 
         return frame_left, frame_bottom, frame_right, frame_top
 
+    def _get_drawing_extent(self) -> float:
+        # get bounding box
+        min_x, min_y, max_x, max_y = self._bounding_box
+        if min_x is None or min_y is None or max_x is None or max_y is None:
+            return 0.0
+
+        width = max_x - min_x
+        height = max_y - min_y
+        extent = math.sqrt(width ** 2 + height ** 2)
+        return extent
+
     def draw_beacons(self):
         if not self.coordinates:
             return
@@ -87,7 +98,7 @@ class CadastralPlan(PlanProps):
 
         # Offset text above/below the line
         normals = line_normals((leg.from_.easting, leg.from_.northing), (leg.to.easting, leg.to.northing), orientation)
-        offset_distance = self.beacon_size * 0.2
+        offset_distance = self._get_drawing_extent() * 0.005
         offset_inside_x = (normals[0][0] / math.hypot(*normals[0])) * offset_distance
         offset_inside_y = (normals[0][1] / math.hypot(*normals[0])) * offset_distance
         offset_outside_x = (normals[1][0] / math.hypot(*normals[1])) * offset_distance
@@ -179,11 +190,6 @@ class CadastralPlan(PlanProps):
         coord = self._coord_dict[self.parcels[0].ids[0]]
         height = (self._frame_coords[3] - self._frame_coords[1]) * 0.07
         self._drawer.draw_north_arrow(coord.easting, self._frame_coords[3] - height, height)
-
-    def draw_starting_point_lines(self):
-        if len(self.parcels) == 0:
-            return
-
 
     def draw(self):
         # Draw elements
