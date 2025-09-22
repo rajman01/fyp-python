@@ -191,6 +191,26 @@ class CadastralPlan(PlanProps):
         height = (self._frame_coords[3] - self._frame_coords[1]) * 0.07
         self._drawer.draw_north_arrow(coord.easting, self._frame_coords[3] - height, height)
 
+        # for easting label
+        width = (self._frame_coords[2] - self._frame_coords[0]) * 0.1
+
+        self._drawer.add_north_arrow_label((self._frame_coords[0], coord.northing),
+                                           (self._frame_coords[0] + width, coord.northing), f"{coord.easting}mE",
+                                           self.label_size)
+        self._drawer.add_north_arrow_label((self._frame_coords[2], coord.northing),
+                                           (self._frame_coords[2] - width, coord.northing), "",
+                                           self.label_size)
+
+        # for northing label
+        northing_label_y = self._frame_coords[1]
+        if len(self.footers) > 0:
+            northing_label_y = northing_label_y + ((self._frame_coords[3] - self._frame_coords[1]) * 0.25)
+
+        self._drawer.add_north_arrow_label((coord.easting, northing_label_y),
+                                           (coord.easting, northing_label_y + height), f"{coord.northing}mN",
+                                           self.label_size)
+        self._drawer.draw_north_arrow_cross(coord.easting, coord.northing, self.beacon_size * 3)
+
     def draw(self):
         # Draw elements
         self.draw_beacons()

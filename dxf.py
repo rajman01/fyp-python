@@ -228,6 +228,44 @@ class SurveyDXFManager:
             (x, y),
         )
 
+    def add_north_arrow_label(self, start: Tuple[float, float], stop: Tuple[float, float], label: str = "", height: float = 100.0):
+        height = height * self.scale
+        x = start[0] * self.scale
+        y = start[1] * self.scale
+        stop_x = stop[0] * self.scale
+        stop_y = stop[1] * self.scale
+
+        # add line
+        self.msp.add_line((x, y), (stop_x, stop_y), dxfattribs={'color': 5})
+
+        if label:
+            angle = math.degrees(math.atan2(stop_y - y, stop_x - x))
+
+            # add text at midpoint
+            self.msp.add_text(
+                label,
+                dxfattribs={
+                    'height': height,
+                    'color': 5,
+                    'style': 'SURVEY_TEXT',
+                    'rotation': angle
+                }
+            ).set_placement(
+                (x, y),
+                align=TextEntityAlignment.TOP_LEFT,
+            )
+
+    def draw_north_arrow_cross(self, x: float, y: float, length: float = 100.0):
+        x = x * self.scale
+        y = y * self.scale
+        length = length * self.scale
+
+        half = length / 2
+
+        # add cross lines
+        self.msp.add_line((x - half, y), (x + half, y), dxfattribs={'color': 5})
+        self.msp.add_line((x, y - half), (x, y + half), dxfattribs={'color': 5})
+
     def draw_graphical_scale(self, x: float, y: float, length: float = 1000.0):
         X = x * self.scale
         Y = y * self.scale
@@ -614,7 +652,7 @@ class SurveyDXFManager:
             url = upload_file(zip_path, folder="survey_plans", file_name=filename)
             if url is None:
                 raise Exception("Upload failed")
-            return url
+            return "url"
 
 
 
