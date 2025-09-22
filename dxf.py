@@ -652,7 +652,7 @@ class SurveyDXFManager:
             url = upload_file(zip_path, folder="survey_plans", file_name=filename)
             if url is None:
                 raise Exception("Upload failed")
-            return "url"
+            return url
 
 
 
