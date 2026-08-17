@@ -95,7 +95,7 @@ class LayoutPlan(BasePlan):
 
     def _area_text(self) -> str:
         if self.layout_boundary.area is not None:
-            return f"AREA :- {self.layout_boundary.area} SQ.METRES"
+            return self._format_area(self.layout_boundary.area)
         return ""
 
     def _north_arrow_reference(self) -> Optional[CoordinateProps]:

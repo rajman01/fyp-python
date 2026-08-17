@@ -45,7 +45,7 @@ class TopographicPlan(BasePlan):
 
     def _area_text(self) -> str:
         if self.topographic_boundary and self.topographic_boundary.area is not None:
-            return f"AREA :- {self.topographic_boundary.area} SQ.METRES"
+            return self._format_area(self.topographic_boundary.area)
         return ""
 
     def _north_arrow_reference(self) -> Optional[CoordinateProps]:

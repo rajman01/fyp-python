@@ -11,7 +11,13 @@ from typing import ClassVar, Optional
 from ezdxf.enums import TextEntityAlignment
 
 from dxf_manager import PAPER_SIZES, SurveyDXFManager
-from models.plan import CoordinateProps, PlanProps, PlanType, TraverseLegProps
+from models.plan import (
+    CoordinateProps,
+    PlanProps,
+    PlanType,
+    TraverseLegProps,
+    origin_display_name,
+)
 from utils import format_number, html_to_mtext, line_normals, readable_angle
 
 # Margins around the data bounding box, as a fraction of its larger side.
@@ -20,6 +26,17 @@ FRAME_Y_PERCENT = 1.5
 
 # Fraction of the frame height reserved for footer boxes.
 FOOTER_HEIGHT_PERCENT = 0.18
+
+# Size of the north-arrow locator cross, as a multiple of the beacon symbol.
+NORTH_CROSS_BEACON_RATIO = 5.0
+
+# Square metres in one hectare. Parcels at or above this are also quoted in
+# hectares in the title block.
+SQUARE_METRES_PER_HECTARE = 10_000
+
+# Decimal places used for the hectare figure (0.001 ha = 10 sq.metres). The
+# app quotes hectares to the same precision.
+HECTARE_DECIMALS = 3
 
 
 class BasePlan(PlanProps):
@@ -115,8 +132,28 @@ class BasePlan(PlanProps):
         """Area line of the title block; empty string hides it."""
         return ""
 
+    def _format_area(self, area: Optional[float]) -> str:
+        """Format an area for the title block.
+
+        Square metres stay the primary figure -- that is what a surveyor
+        verifies against -- and are printed exactly as supplied. Once the
+        parcel reaches a full hectare the equivalent in hectares is appended
+        for readability, matching how the app quotes areas.
+
+        e.g. ``AREA :- 12500.0 SQ.METRES (1.250 HA)``
+        """
+        if area is None:
+            return ""
+
+        text = f"AREA :- {area} SQ.METRES"
+        if area >= SQUARE_METRES_PER_HECTARE:
+            hectares = area / SQUARE_METRES_PER_HECTARE
+            text += f" ({hectares:.{HECTARE_DECIMALS}f} HA)"
+        return text
+
     def _origin_text(self) -> str:
-        return f"ORIGIN :- {self.origin.upper()}"
+        """Origin line of the title block, e.g. ``ORIGIN :- UTM ZONE 31``."""
+        return f"ORIGIN :- {origin_display_name(self.origin).upper()}"
 
     # ------------------------------------------------------------------
     # Shared drawing routines
@@ -277,7 +314,11 @@ class BasePlan(PlanProps):
             (coord.easting, northing_label_y), (coord.easting, northing_label_y + height),
             f"{coord.northing}mN", self.label_size,
         )
-        self._drawer.draw_north_arrow_cross(coord.easting, coord.northing, self.beacon_size * 3)
+        # The locator cross is not a beacon symbol; the multiplier keeps it at
+        # its previous absolute size now that the beacon symbol is smaller.
+        self._drawer.draw_north_arrow_cross(
+            coord.easting, coord.northing, self.beacon_size * NORTH_CROSS_BEACON_RATIO
+        )
 
     # ------------------------------------------------------------------
     # Output

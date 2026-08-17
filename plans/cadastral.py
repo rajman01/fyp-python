@@ -25,7 +25,7 @@ class CadastralPlan(BasePlan):
 
     def _area_text(self) -> str:
         if self.parcels and self.parcels[0].area is not None:
-            return f"AREA :- {self.parcels[0].area} SQ.METRES"
+            return self._format_area(self.parcels[0].area)
         return ""
 
     def _north_arrow_reference(self) -> Optional[CoordinateProps]:

@@ -22,6 +22,34 @@ class PlanType(str, Enum):
 class PlanOrigin(str, Enum):
     UTM_ZONE_31 = "utm_zone_31"
 
+    @property
+    def display_name(self) -> str:
+        """Human-readable label for this origin (e.g. ``UTM Zone 31``)."""
+        return origin_display_name(self)
+
+
+#: Explicit display labels for each origin. Kept as a map rather than derived
+#: from the enum value so origins whose casing does not fall out of a simple
+#: ``replace``/``title`` (acronyms, arbitrary datums) still read correctly.
+PLAN_ORIGIN_DISPLAY_NAMES = {
+    PlanOrigin.UTM_ZONE_31.value: "UTM Zone 31",
+}
+
+
+def origin_display_name(origin) -> str:
+    """Return the human-readable label for ``origin``.
+
+    Accepts a :class:`PlanOrigin` or a raw string. Origins without an entry in
+    :data:`PLAN_ORIGIN_DISPLAY_NAMES` fall back to the raw value with
+    underscores replaced by spaces, so a newly added origin is still readable
+    before it gets an explicit label.
+    """
+    value = getattr(origin, "value", origin)
+    if value is None:
+        return ""
+    value = str(value)
+    return PLAN_ORIGIN_DISPLAY_NAMES.get(value, value.replace("_", " ").title())
+
 
 class BeaconType(str, Enum):
     DOT = "dot"
@@ -223,7 +251,11 @@ class PlanProps(BaseModel):
     origin: PlanOrigin = PlanOrigin.UTM_ZONE_31
     scale: float = 1000
     beacon_type: BeaconType = BeaconType.BOX
-    beacon_size: float = 0.3
+    #: Beacon symbol width in metres. Fallback only: the API derives this
+    #: from the drawing extent so the symbol prints at ~1.6 mm (a neat point
+    #: marker) regardless of parcel size or plan scale. An explicit value in
+    #: the payload always wins.
+    beacon_size: float = 0.18
     label_size: float = 1.0
     personel_name: str = ""
     surveyor_name: str = ""
