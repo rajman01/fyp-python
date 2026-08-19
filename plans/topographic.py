@@ -53,6 +53,19 @@ class TopographicPlan(BasePlan):
             return None
         return self.topographic_boundary.coordinates[0]
 
+    def _title_block_notes(self) -> list:
+        """Annotate the sheet with the contour interval actually used.
+
+        Only shown when contours are drawn, so the label never advertises an
+        interval for a plan that has no contours.
+        """
+        settings = self.topographic_setting
+        draws_contours = settings.show_contours and (settings.tin or settings.grid)
+        if draws_contours and settings.contour_interval > 0:
+            interval = f"{settings.contour_interval:g}"
+            return [f"CONTOUR INTERVAL :- {interval} M"]
+        return []
+
     # ------------------------------------------------------------------
     # Points & boundary
     # ------------------------------------------------------------------

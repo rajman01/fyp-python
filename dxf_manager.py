@@ -427,7 +427,7 @@ class SurveyDXFManager:
 
     def draw_title_block(self, text: str, x: float, y: float, width: float,
                          title_height: float = 1.0, graphical_scale_length: float = 1000.0,
-                         origin: str = "", area: str = ""):
+                         origin: str = "", area: str = "", notes: Optional[List[str]] = None):
         x, y = x * self.scale, y * self.scale
         title_height = title_height * self.scale
         width = width * self.scale
@@ -465,12 +465,15 @@ class SurveyDXFManager:
         graphical_box = bbox.extents(graphical_ref.virtual_entities())
         graphical_min_y = graphical_box.extmin.y
 
-        # area and origin lines below the graphical scale
+        # area, origin and any extra notes below the graphical scale
         lines = []
         if area:
             lines.append(rf"\C1;{area}")
         if origin:
             lines.append(rf"\C5;{origin}")
+        for note in notes or []:
+            if note:
+                lines.append(rf"\C7;{note}")
         if not lines:
             return
 

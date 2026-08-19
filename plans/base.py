@@ -155,6 +155,15 @@ class BasePlan(PlanProps):
         """Origin line of the title block, e.g. ``ORIGIN :- UTM ZONE 31``."""
         return f"ORIGIN :- {origin_display_name(self.origin).upper()}"
 
+    def _title_block_notes(self) -> list:
+        """Extra note lines drawn below the origin/area in the title block.
+
+        Empty by default; plan types override this to annotate the sheet with
+        settings that matter for interpretation (e.g. the topographic contour
+        interval).
+        """
+        return []
+
     # ------------------------------------------------------------------
     # Shared drawing routines
     # ------------------------------------------------------------------
@@ -183,6 +192,7 @@ class BasePlan(PlanProps):
             graphical_scale_length=min(frame_width, frame_height) * 0.4,
             area=self._area_text(),
             origin=self._origin_text(),
+            notes=self._title_block_notes(),
         )
 
     def _effective_footers(self) -> list:

@@ -7,7 +7,7 @@ These models define the JSON contract between this service and its callers
 from enum import Enum
 from typing import List, Optional, Union
 from datetime import datetime
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from bs4 import BeautifulSoup
 
 
@@ -21,6 +21,8 @@ class PlanType(str, Enum):
 
 class PlanOrigin(str, Enum):
     UTM_ZONE_31 = "utm_zone_31"
+    UTM_ZONE_32 = "utm_zone_32"
+    UTM_ZONE_33 = "utm_zone_33"
 
     @property
     def display_name(self) -> str:
@@ -33,6 +35,8 @@ class PlanOrigin(str, Enum):
 #: ``replace``/``title`` (acronyms, arbitrary datums) still read correctly.
 PLAN_ORIGIN_DISPLAY_NAMES = {
     PlanOrigin.UTM_ZONE_31.value: "UTM Zone 31",
+    PlanOrigin.UTM_ZONE_32.value: "UTM Zone 32",
+    PlanOrigin.UTM_ZONE_33.value: "UTM Zone 33",
 }
 
 
@@ -132,6 +136,18 @@ class TopographicSettingProps(BaseModel):
     show_mesh: Optional[bool] = False  # legacy single mesh toggle (deprecated)
     show_tin_mesh: Optional[bool] = False  # draw the TIN triangulation overlay
     show_grid: Optional[bool] = False  # draw the coordinate reference grid
+
+    @model_validator(mode="after")
+    def _validate_contour_settings(self):
+        """The contour interval divides the elevation range into levels, so a
+        zero or negative value is meaningless (and would break level
+        generation). Enforce it whenever contours are generated or shown."""
+        if self.show_contours or self.tin or self.grid:
+            if self.contour_interval <= 0:
+                raise ValueError("contour_interval must be greater than 0")
+            if self.major_contour <= 0:
+                raise ValueError("major_contour must be greater than 0")
+        return self
 
 
 class TopographicBoundaryProps(BaseModel):
