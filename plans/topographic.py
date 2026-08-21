@@ -243,6 +243,22 @@ class TopographicPlan(BasePlan):
             return []
         return [str(c.id) for c in (boundary.coordinates or []) if c.id not in (None, "")]
 
+    def _label_reach(self):
+        # The reference grid prints "(easting, northing)" at each corner,
+        # running right from the corner it belongs to -- wider than any
+        # boundary beacon id, and the furthest right anything on the sheet is
+        # drawn.
+        reach_x, reach_y = super()._label_reach()
+        if not self._reference_grid_drawn():
+            return reach_x, reach_y
+
+        min_x, min_y, max_x, max_y = self._bounding_box
+        if max_x is None:
+            return reach_x, reach_y
+        label_h = self.height("grid_label", 2)
+        corner = self._drawer.text_width(f"({max_x:.1f}, {max_y:.1f})", label_h)
+        return max(reach_x, corner), max(reach_y, label_h)
+
     def _origin_value_ceiling(self, default: float) -> float:
         # The reference grid hangs its own "E: ..." labels just under the
         # data, in the same strip the origin easting climbs through, so the

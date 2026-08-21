@@ -7,7 +7,7 @@ block, footer boxes, north arrow, and bearing/distance leg labels.
 
 import logging
 import math
-from typing import ClassVar, List, NamedTuple, Optional
+from typing import ClassVar, List, NamedTuple, Optional, Tuple
 
 from ezdxf.enums import TextEntityAlignment
 
@@ -326,7 +326,13 @@ class BasePlan(PlanProps):
         # Schedules take a band down the right of the sheet; the drawing is
         # centred in what is left, so a table can never sit on the drawing.
         draw_w = frame_w - self._table_band_mm() * self.mm_to_model
-        center_x = (min_x + max_x) / 2
+        # Centre the *ink*, not the coordinates. Beacon ids are drawn up and
+        # to the right of their symbols, so the drawing reaches further that
+        # way than its bounding box does; centring the bare box therefore left
+        # a wide margin on the left and a thin one on the right, which reads
+        # as the frame crowding the plan even when the sheet has room.
+        reach_x, reach_y = self._label_reach()
+        center_x = (min_x + max_x + reach_x) / 2
         left = center_x - draw_w / 2
 
         # Vertical: centre the data in the usable band, then derive the frame.
@@ -334,7 +340,7 @@ class BasePlan(PlanProps):
                            + self._bottom_band_mm() * self.mm_to_model)
         band_top_gap = self._title_band_height(frame_w, frame_h)
         band_height = frame_h - band_bottom_gap - band_top_gap
-        centre_y = (min_y + max_y) / 2
+        centre_y = (min_y + max_y + reach_y) / 2
         bottom = centre_y - band_bottom_gap - band_height / 2
 
         return left, bottom, left + frame_w, bottom + frame_h
@@ -342,6 +348,23 @@ class BasePlan(PlanProps):
     def _labelled_ids(self) -> List[str]:
         """Point ids that are drawn as labels beside their symbols."""
         return [str(c.id) for c in (self.coordinates or []) if c.id not in (None, "")]
+
+    def _label_reach(self) -> Tuple[float, float]:
+        """How much further the drawing's ink runs than its coordinates, in
+        model units, as (right, up).
+
+        Beacon labels are set up and to the right of the point they belong to,
+        so this is one-sided: the left and bottom edges of the ink sit on the
+        coordinates themselves.
+        """
+        ids = self._labelled_ids()
+        if not ids:
+            return 0.0, 0.0
+
+        scale = self.group_scale("annotation")
+        height_mm = TEXT_HEIGHTS_MM["beacon_label"] * scale
+        width_mm = self._drawer.text_width(max(ids, key=len), height_mm)
+        return (width_mm * self.mm_to_model, height_mm * self.mm_to_model)
 
     def _annotation_margin_mm(self) -> float:
         """Clearance the drawing needs beyond the survey extent, in printed mm.
@@ -1146,6 +1169,11 @@ class BasePlan(PlanProps):
             min_x = max_x = coord.easting
         if min_y is None:
             min_y = coord.northing
+        # Labels hang to the right of their points, so the drawing reaches
+        # further that way than its bounding box; the right margin is smaller
+        # than it looks.
+        reach_x, _reach_y = self._label_reach()
+        max_x += reach_x
         from_left = (min_x - frame_left) >= (frame_right - max_x)
 
         # Each value has to live in the gap between the frame and the drawing,

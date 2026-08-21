@@ -309,17 +309,23 @@ def check_frame_clearance(out_dir):
         doc = ezdxf.readfile(path)
         fl, _, fr, _ = plan._frame_coords
         mm = plan.mm_to_model
-        nearest = min(
-            min(ext.extmin.x - fl, fr - ext.extmax.x) / mm
-            for ext in (bbox.extents([e]) for e in doc.modelspace()
-                        if e.dxf.layer in ("LABELS", "PARCELS", "BEACONS"))
-            if ext is not None and ext.has_data
-        )
-        return plan, nearest
+        boxes = [ext for ext in (bbox.extents([e]) for e in doc.modelspace()
+                                 if e.dxf.layer in ("LABELS", "PARCELS", "BEACONS"))
+                 if ext is not None and ext.has_data]
+        left = min(ext.extmin.x for ext in boxes) - fl
+        right = fr - max(ext.extmax.x for ext in boxes)
+        return plan, min(left, right) / mm, (left / mm, right / mm)
 
     for ids, label in (([f"SBD 120{i}" for i in range(1, 5)], "long ids"),
                        (["P1", "P2", "P3", "P4"], "short ids")):
-        plan, nearest = clearance(ids)
+        plan, nearest, (left, right) = clearance(ids)
+
+        # Beacon ids hang to the right of their points, so centring the bare
+        # coordinate box put a wide margin on the left and a thin one on the
+        # right. The ink is what a reader sees centred, not the coordinates.
+        if max(left, right) > 2.0 * max(min(left, right), 0.1):
+            errors.append(f"{label}: margins are lopsided -- "
+                          f"left {left:.1f} mm vs right {right:.1f} mm")
         # A label that close to the border reads as a printing error.
         if nearest < 4.0:
             errors.append(f"{label}: drawing ink comes within {nearest:.2f} mm "
@@ -329,8 +335,8 @@ def check_frame_clearance(out_dir):
             errors.append(f"{label}: margin is still the bare "
                           f"{plan._annotation_margin_mm():.1f} mm constant")
 
-    long_plan, _ = clearance([f"SBD 120{i}" for i in range(1, 5)])
-    short_plan, _ = clearance(["P1", "P2", "P3", "P4"])
+    long_plan, _, _ = clearance([f"SBD 120{i}" for i in range(1, 5)])
+    short_plan, _, _ = clearance(["P1", "P2", "P3", "P4"])
     if long_plan._annotation_margin_mm() <= short_plan._annotation_margin_mm():
         errors.append("longer station ids did not earn more room than short ones")
 
