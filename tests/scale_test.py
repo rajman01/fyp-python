@@ -226,9 +226,15 @@ def check_size_control_groups(out_dir):
     FOOTER = ("plan_number", "surveyor_name")
 
     def heights(**over):
+        # Compared as printed millimetres, not model units. A control that
+        # enlarges the title block can push a survey onto the next standard
+        # scale, and that changes every model-unit height on the sheet without
+        # changing what any of them measure on paper -- which is the property
+        # that actually matters here.
         plan = CadastralPlan(**payload(scale=500, **over))
-        return ({k: plan.height(k, 0.0) for k in TITLE + ANNOTATION + FOOTER},
-                plan.beacon_symbol_size)
+        mm = plan.mm_to_model
+        return ({k: plan.height(k, 0.0) / mm for k in TITLE + ANNOTATION + FOOTER},
+                plan.beacon_symbol_size / mm)
 
     base, base_beacon = heights()
 
@@ -251,7 +257,7 @@ def check_size_control_groups(out_dir):
 
     # Beacon Size owns the symbol and no text at all.
     moved, beacon = heights(beacon_size=4.0)
-    if abs(beacon - 4.0 * 0.5) > 1e-6:
+    if abs(beacon - 4.0) > 1e-6:
         errors.append(f"beacon_size did not set the symbol ({beacon:.3f})")
     for key, value in moved.items():
         if abs(value - base[key]) > 1e-6:
@@ -272,6 +278,96 @@ def check_size_control_groups(out_dir):
     got = moved["quoted_coordinate"] / moved["bearing_distance"]
     if abs(got - ratio) > 1e-6:
         errors.append(f"label_size flattened the group ratios ({got:.3f} vs {ratio:.3f})")
+
+    return errors
+
+
+def check_frame_clearance(out_dir):
+    """The sheet is chosen to hold the drawing *and* the labels around it.
+
+    The survey extent is where the points stop, not where the drawing stops:
+    every beacon carries its id beside it. Fitting the bare bounding box put
+    "SBD 1204" 1.4 mm off the frame on a real plan, because the margin was a
+    flat 6 mm guess and that label is 15 mm wide.
+    """
+    errors = []
+    from ezdxf import bbox
+
+    # Long station ids, as Nigerian plans use, against short ones.
+    def clearance(ids):
+        pts = [(ids[i], 543210.0 + (i % 2) * 120, 712345.0 + (i // 2) * 90)
+               for i in range(len(ids))]
+        data = payload(scale=1000)
+        data["coordinates"] = [{"id": i, "easting": e, "northing": n} for i, e, n in pts]
+        data["parcels"] = [{"name": "P", "ids": [i for i, _, _ in pts], "area": 10000.0,
+                            "legs": []}]
+        plan = CadastralPlan(**data)
+        plan.draw()
+        path = os.path.join(out_dir, f"clearance_{len(ids[0])}.dxf")
+        plan.save_dxf(path)
+
+        doc = ezdxf.readfile(path)
+        fl, _, fr, _ = plan._frame_coords
+        mm = plan.mm_to_model
+        nearest = min(
+            min(ext.extmin.x - fl, fr - ext.extmax.x) / mm
+            for ext in (bbox.extents([e]) for e in doc.modelspace()
+                        if e.dxf.layer in ("LABELS", "PARCELS", "BEACONS"))
+            if ext is not None and ext.has_data
+        )
+        return plan, nearest
+
+    for ids, label in (([f"SBD 120{i}" for i in range(1, 5)], "long ids"),
+                       (["P1", "P2", "P3", "P4"], "short ids")):
+        plan, nearest = clearance(ids)
+        # A label that close to the border reads as a printing error.
+        if nearest < 4.0:
+            errors.append(f"{label}: drawing ink comes within {nearest:.2f} mm "
+                          "of the frame")
+        # The margin must actually account for the label, not a flat guess.
+        if plan._annotation_margin_mm() <= 6.0:
+            errors.append(f"{label}: margin is still the bare "
+                          f"{plan._annotation_margin_mm():.1f} mm constant")
+
+    long_plan, _ = clearance([f"SBD 120{i}" for i in range(1, 5)])
+    short_plan, _ = clearance(["P1", "P2", "P3", "P4"])
+    if long_plan._annotation_margin_mm() <= short_plan._annotation_margin_mm():
+        errors.append("longer station ids did not earn more room than short ones")
+
+    return errors
+
+
+def check_scale_bar_labels(out_dir):
+    """The scale bar's numbers sit above its ticks, not through them.
+
+    They were placed by their top edge one tick-height up, which left the
+    bottom 40% of every glyph lying over the tick it labelled.
+    """
+    from ezdxf import bbox
+
+    errors = []
+    plan = CadastralPlan(**payload(scale=1000))
+    plan.draw()
+    path = os.path.join(out_dir, "scale_bar.dxf")
+    plan.save_dxf(path)
+
+    doc = ezdxf.readfile(path)
+    block = next((b for b in doc.blocks if b.name.startswith("GRAPHICAL_SCALE")), None)
+    if block is None:
+        return ["no graphical scale block was drawn"]
+
+    ticks = [e for e in block if e.dxftype() == "LINE"
+             and abs(e.dxf.start.x - e.dxf.end.x) < 1e-9]
+    labels = [e for e in block if e.dxftype() == "TEXT"]
+    if not ticks or not labels:
+        return ["the graphical scale has no ticks or no labels"]
+
+    tick_top = max(max(t.dxf.start.y, t.dxf.end.y) for t in ticks)
+    for text in labels:
+        box = bbox.extents([text])
+        if box.extmin.y < tick_top - 1e-9:
+            errors.append(f"scale label {text.dxf.text!r} crosses its tick "
+                          f"(text bottom {box.extmin.y:.2f} < tick top {tick_top:.2f})")
 
     return errors
 
@@ -343,6 +439,8 @@ def main():
         ("surveyor reference heights", check_surveyor_reference_heights),
         ("manual overrides", check_overrides),
         ("size control groups", check_size_control_groups),
+        ("frame clearance", check_frame_clearance),
+        ("scale bar labels", check_scale_bar_labels),
         ("scale auto-fit", check_scale_autofit),
         ("sheet frame is the paper", check_sheet_frame),
     ):

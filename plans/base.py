@@ -14,6 +14,7 @@ from ezdxf.enums import TextEntityAlignment
 from dxf_manager import PAPER_SIZES, SurveyDXFManager
 from models.plan import (
     BEACON_SYMBOL_MAX_MM,
+    TEXT_HEIGHTS_MM,
     BEACON_SYMBOL_MM,
     FONT_SIZE_MIN_MM,
     LEGACY_BEACON_MM,
@@ -265,7 +266,7 @@ class BasePlan(PlanProps):
         # printed size, so it comes off the usable sheet -- adding it to the
         # survey instead measured it at the scale being replaced, which left
         # the resolver and the fit check disagreeing about whether a plan fit.
-        margin_mm = ANNOTATION_MARGIN_MM * self.group_scale("annotation")
+        margin_mm = self._annotation_margin_mm()
         printable_w_mm, printable_h_mm = self.printable_area()
         usable_w_mm = max(printable_w_mm - self._table_band_mm() - 2 * margin_mm, 1.0)
         usable_h_mm = max(self._usable_height_mm() - 2 * margin_mm, 1.0)
@@ -338,10 +339,37 @@ class BasePlan(PlanProps):
 
         return left, bottom, left + frame_w, bottom + frame_h
 
+    def _labelled_ids(self) -> List[str]:
+        """Point ids that are drawn as labels beside their symbols."""
+        return [str(c.id) for c in (self.coordinates or []) if c.id not in (None, "")]
+
+    def _annotation_margin_mm(self) -> float:
+        """Clearance the drawing needs beyond the survey extent, in printed mm.
+
+        The survey extent is where the *points* stop, not where the drawing
+        stops. Every beacon carries its id beside it, so a plan whose stations
+        are named "SBD 1204" reaches some 17 mm further than its own bounding
+        box -- and fitting the bare extent left those labels a millimetre off
+        the frame. Measuring the longest id means the sheet is chosen to hold
+        the drawing *and* its annotation.
+        """
+        scale = self.group_scale("annotation")
+        margin = ANNOTATION_MARGIN_MM * scale
+
+        ids = self._labelled_ids()
+        if not ids:
+            return margin
+
+        # text_width is proportional, so a height in millimetres gives a width
+        # in millimetres. Only the longest id is measured -- a survey can hold
+        # a million points and they are all set in the same style.
+        height_mm = TEXT_HEIGHTS_MM["beacon_label"] * scale
+        return margin + self._drawer.text_width(max(ids, key=len), height_mm)
+
     def annotation_margin(self) -> float:
         """Room the drawing's labels need beyond the survey extent, in model
         units. Scales with the text, so a larger font also gets more room."""
-        return ANNOTATION_MARGIN_MM * self.group_scale("annotation") * self.mm_to_model
+        return self._annotation_margin_mm() * self.mm_to_model
 
     def _title_top_gap(self, frame_h: float) -> float:
         """Gap between the frame's top edge and the first line of the title.
@@ -736,7 +764,7 @@ class BasePlan(PlanProps):
         usable_h_mm = self._usable_height_mm()
 
         # Smallest standard scale that would hold this survey on this sheet.
-        annotation_margin = ANNOTATION_MARGIN_MM * self.group_scale("annotation")
+        annotation_margin = self._annotation_margin_mm()
         usable_w_mm = max(usable_w_mm - 2 * annotation_margin, 1.0)
         usable_h_mm = max(usable_h_mm - 2 * annotation_margin, 1.0)
         needed = max((data_w - 2 * margin) / usable_w_mm,

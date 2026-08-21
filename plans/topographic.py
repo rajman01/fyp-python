@@ -235,6 +235,14 @@ class TopographicPlan(BasePlan):
             return False
         return bool(settings.show_grid or (settings.show_mesh and settings.grid))
 
+    def _labelled_ids(self):
+        # Only the boundary beacons carry ids; the survey points themselves
+        # are drawn as spot heights, so their ids never reach the margin.
+        boundary = self.topographic_boundary
+        if boundary is None:
+            return []
+        return [str(c.id) for c in (boundary.coordinates or []) if c.id not in (None, "")]
+
     def _origin_value_ceiling(self, default: float) -> float:
         # The reference grid hangs its own "E: ..." labels just under the
         # data, in the same strip the origin easting climbs through, so the

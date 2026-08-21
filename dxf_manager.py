@@ -414,8 +414,11 @@ class SurveyDXFManager:
         interval = length / 5
         if text_height is None or text_height <= 0:
             text_height = height * 0.5
-        # Tick labels sit above the ticks, which rise to 1.5x the bar height.
-        label_y = height * 1.5 + text_height * 0.6
+        # Tick labels sit clear above the ticks, which rise to 1.5x the bar
+        # height. They are placed by their *bottom* edge: hanging them from the
+        # top put the last 40% of every glyph back down over the tick it
+        # labelled.
+        label_y = height * 1.5 + text_height * 0.35
 
         block_name = f"GRAPHICAL_SCALE_{len(self.doc.blocks)}"
         block = self.doc.blocks.new(name=block_name)
@@ -437,13 +440,13 @@ class SurveyDXFManager:
             block.add_line((tick_x, 0), (tick_x, height * 1.5), dxfattribs={"color": 7})
 
             text = label_for(i)
-            alignment = TextEntityAlignment.TOP_CENTER
+            alignment = TextEntityAlignment.BOTTOM_CENTER
             if i == 0:
                 text = f"Meters {interval_m:g}"
-                alignment = TextEntityAlignment.TOP_RIGHT
+                alignment = TextEntityAlignment.BOTTOM_RIGHT
             if i == 5:
                 text = f"{label_for(i)} Meters"
-                alignment = TextEntityAlignment.TOP_LEFT
+                alignment = TextEntityAlignment.BOTTOM_LEFT
 
             block.add_text(
                 text,
