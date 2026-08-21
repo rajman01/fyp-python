@@ -1,9 +1,18 @@
 """Low-level DXF drawing manager.
 
 Wraps ezdxf to provide the drawing primitives used by the plan generators
-(beacons, parcels, contours, frames, title blocks, ...). All coordinates
-passed to this class are in model units (metres); they are multiplied by
-``scale`` so that the finished drawing is at the requested plan scale.
+(beacons, parcels, contours, frames, title blocks, ...).
+
+Every coordinate and size passed to this class is in **true model units**
+(metres) and is written to the DXF unchanged: the drawing is 1:1 in ground
+coordinates, so a beacon at easting 543210 sits at x=543210 in the file and a
+surveyor can snap to it and read the real value. Plot scale is applied once,
+at render time, by :meth:`SurveyDXFManager.save_pdf`.
+
+Callers size annotation (text heights, symbols) by converting a printed
+millimetre size to model units at the plan scale -- see
+``PlanProps.text_height`` -- rather than passing fractions of the drawing
+extent.
 """
 
 import logging
@@ -23,6 +32,7 @@ from ezdxf.addons.drawing import Frontend, RenderContext, config, layout, pymupd
 from ezdxf.enums import TextEntityAlignment
 from ezdxf.fonts import fonts as ezfonts
 from ezdxf.tools.text import MTextEditor
+from ezdxf.tools.text_size import mtext_size
 
 from upload import upload_file
 
@@ -36,6 +46,9 @@ MEASUREMENT_FONT_SUBSTITUTES = {
     "arial": "LiberationSans-Regular.ttf",
     "courier new": "LiberationMono-Regular.ttf",
 }
+
+# Print margin the PDF renderer leaves on every side of the sheet, in mm.
+PAGE_MARGIN_MM = 20.0
 
 # Paper sizes in mm (width, height) for portrait orientation.
 PAPER_SIZES = {
@@ -61,9 +74,15 @@ def nice_round(value: float) -> float:
 
 
 class SurveyDXFManager:
-    def __init__(self, plan_name: str = "Survey Plan", scale: float = 1.0, dxf_version: str = "R2000"):
+    def __init__(self, plan_name: str = "Survey Plan", mm_to_model: float = 1.0,
+                 dxf_version: str = "R2000"):
+        """``mm_to_model`` is how many model units print as one millimetre at
+        the plan's scale. Geometry never uses it -- coordinates go in at true
+        ground values -- it exists only for the handful of DXF settings that
+        are absolute model sizes with no caller-supplied value (the point
+        display size and hatch pattern spacing)."""
         self.plan_name = plan_name
-        self.scale = scale
+        self.mm_to_model = mm_to_model
         self.dxf_version = dxf_version
         self.doc = ezdxf.new(dxfversion=dxf_version)
         self.msp = self.doc.modelspace()
@@ -78,13 +97,16 @@ class SurveyDXFManager:
         self.doc.header["$ANGBASE"] = 90.0  # 0 degrees points North
         # Absolute point display size; the default (0 = relative to viewport)
         # is unsupported by the PDF renderer and triggers a log warning.
-        self.doc.header["$PDSIZE"] = 1.0
+        # Expressed as a printed size so POINT entities stay a consistent dot
+        # on paper instead of growing with the plan scale.
+        self.doc.header["$PDSIZE"] = 0.6 * self.mm_to_model
 
     # ------------------------------------------------------------------
     # Layer / style setup
     # ------------------------------------------------------------------
     def setup_layers(self):
         self.doc.layers.add(name="LABELS", color=colors.BLACK)
+        self.doc.layers.add(name="TABLES", color=colors.BLACK)
         self.doc.layers.add(name="FRAME", color=colors.BLACK)
         self.doc.layers.add(name="TITLE_BLOCK", color=colors.BLACK)
         self.doc.layers.add(name="FOOTER", color=colors.BLACK)
@@ -135,7 +157,6 @@ class SurveyDXFManager:
         self.doc.styles.add("SURVEY_TEXT", font=f"{font_name}.ttf")
 
     def setup_beacon_style(self, type_: str = "box", size: float = 1.0):
-        size = size * self.scale
         block = self.doc.blocks.new(name="BEACON_POINT")
         radius = size * 0.2  # inner hatch radius
         half = size / 2
@@ -156,7 +177,6 @@ class SurveyDXFManager:
         path.add_arc((0, 0), radius=radius, start_angle=0, end_angle=360)
 
     def setup_topo_point_style(self, size: float = 1.0):
-        size = size * self.scale
         block = self.doc.blocks.new(name="TOPO_POINT")
 
         # cross with a colored point at the center
@@ -168,58 +188,56 @@ class SurveyDXFManager:
     # Drawing primitives
     # ------------------------------------------------------------------
     def draw_beacon(self, x: float, y: float, z: float = 0,
-                    text_height: float = 1.0, extent: float = 1000, label: Optional[str] = None):
+                    text_height: float = 1.0, label: Optional[str] = None):
         """Add a beacon point with an optional label offset from the point."""
-        x, y, z = x * self.scale, y * self.scale, z * self.scale
-        text_height = text_height * self.scale
 
         self.msp.add_blockref("BEACON_POINT", (x, y, z), dxfattribs={"layer": "BEACONS"})
 
         if label is not None:
-            offset = self.scale * extent * 0.01
+            offset = 0.8 * self.mm_to_model
             self.msp.add_text(
                 label,
                 dxfattribs={"layer": "LABELS", "height": text_height, "style": "SURVEY_TEXT"},
             ).set_placement((x + offset, y + offset))
 
     def add_parcel(self, points: List[Tuple[float, float]]):
-        points = [(x * self.scale, y * self.scale) for x, y, *_ in points]
+        points = [(x, y) for x, y, *_ in points]
         self.msp.add_lwpolyline(points, close=True, dxfattribs={"layer": "PARCELS"})
 
     def add_boundary(self, points: List[Tuple[float, float]]):
-        points = [(x * self.scale, y * self.scale) for x, y, *_ in points]
+        points = [(x, y) for x, y, *_ in points]
         self.msp.add_lwpolyline(points, close=True, dxfattribs={"layer": "BOUNDARY"})
 
     def add_buildable(self, points: List[Tuple[float, float]]):
-        points = [(x * self.scale, y * self.scale) for x, y, *_ in points]
+        points = [(x, y) for x, y, *_ in points]
         self.msp.add_lwpolyline(points, close=True, dxfattribs={"layer": "BUILDABLE"})
 
     def add_road_cl(self, points: List[Tuple[float, float]]):
-        points = [(x * self.scale, y * self.scale) for x, y, *_ in points]
+        points = [(x, y) for x, y, *_ in points]
         self.msp.add_lwpolyline(points, dxfattribs={"layer": "ROADS_CL"})
 
     def add_road(self, points: List[Tuple[float, float]]):
-        points = [(x * self.scale, y * self.scale) for x, y, *_ in points]
+        points = [(x, y) for x, y, *_ in points]
         self.msp.add_lwpolyline(points, dxfattribs={"layer": "ROADS"})
 
     def add_polyline(self, points: List[Tuple[float, float]], layer: str, close: bool = False):
         """Add a generic 2D polyline on the given layer."""
-        points = [(x * self.scale, y * self.scale) for x, y, *_ in points]
+        points = [(x, y) for x, y, *_ in points]
         self.msp.add_lwpolyline(points, close=close, dxfattribs={"layer": layer})
 
     def add_greenspace(self, points: List[Tuple[float, float]]):
-        points = [(x * self.scale, y * self.scale) for x, y, *_ in points]
+        points = [(x, y) for x, y, *_ in points]
         self.msp.add_lwpolyline(points, close=True, dxfattribs={"layer": "GREEN_SPACE"})
 
         hatch = self.msp.add_hatch(dxfattribs={"layer": "GREEN_SPACE"})
-        hatch.set_pattern_fill("ANSI31", scale=0.5)
+        # Pattern spacing is in model units; tie it to the printed size so the
+        # hatch reads at the same density on paper at any scale.
+        hatch.set_pattern_fill("ANSI31", scale=max(2.0 * self.mm_to_model, 1e-6))
         hatch.paths.add_polyline_path(points, is_closed=True)
 
     def add_label(self, text: str, x: float, y: float, angle: float = 0.0, height: float = 1.0,
                   alignment=TextEntityAlignment.MIDDLE_CENTER):
         """Add single-line text on the LABELS layer (centered by default)."""
-        x, y = x * self.scale, y * self.scale
-        height = height * self.scale
 
         self.msp.add_text(
             text,
@@ -234,8 +252,6 @@ class SurveyDXFManager:
     def add_mtext_label(self, text: str, x: float, y: float, angle: float = 0.0,
                         height: float = 1.0, layer: str = "LABELS"):
         """Add a single-line MText label centered at (x, y)."""
-        x, y = x * self.scale, y * self.scale
-        height = height * self.scale
 
         mtext = self.msp.add_mtext(text, dxfattribs={
             "layer": layer,
@@ -258,11 +274,11 @@ class SurveyDXFManager:
         font_file = "txt"
         if "SURVEY_TEXT" in self.doc.styles:
             font_file = self.doc.styles.get("SURVEY_TEXT").dxf.font or "txt"
-        font = self._measurement_font(font_file, height * self.scale)
+        font = self._measurement_font(font_file, height)
 
         text_width = font.text_width(left + right)
         space_width = max(font.text_width("| |") - font.text_width("||"), 1e-9)
-        spaces = max(1, round((span * self.scale - text_width) / space_width))
+        spaces = max(1, round((span - text_width) / space_width))
 
         return self.add_mtext_label(f"{left}{' ' * spaces}{right}", x, y,
                                     angle=angle, height=height, layer=layer)
@@ -270,8 +286,6 @@ class SurveyDXFManager:
     def add_text(self, text: str, x: float, y: float, height: float = 1.0,
                  rotation: float = 0.0, alignment=TextEntityAlignment.TOP_LEFT):
         """Add single-line text on the TEXT layer."""
-        x, y = x * self.scale, y * self.scale
-        height = height * self.scale
 
         self.msp.add_text(
             text,
@@ -289,8 +303,6 @@ class SurveyDXFManager:
     def draw_north_arrow(self, x: float, y: float, height: float = 100.0, rotation: float = 0.0):
         """Draw the north arrow; ``rotation`` (CCW degrees) supports rotated
         plan views where sheet-up is not true north."""
-        height = height * self.scale
-        x, y = x * self.scale, y * self.scale
 
         if "NORTH_ARROW" not in self.doc.blocks:
             block = self.doc.blocks.new(name="NORTH_ARROW")
@@ -317,36 +329,64 @@ class SurveyDXFManager:
 
     def add_north_arrow_label(self, start: Tuple[float, float], stop: Tuple[float, float],
                               label: str = "", height: float = 100.0):
-        """Draw a grid reference line with its label sitting just clear of it,
-        offset perpendicular to the line by a fraction of the text height."""
-        height = height * self.scale
-        x, y = start[0] * self.scale, start[1] * self.scale
-        stop_x, stop_y = stop[0] * self.scale, stop[1] * self.scale
+        """Draw an origin grid tick with its coordinate value sitting on it.
+
+        The value starts at ``start`` -- the frame edge -- and runs along the
+        tick towards ``stop``, resting on the line the way text rests on a
+        baseline. Callers size the tick to the label so the number never runs
+        off the end of the line it belongs to.
+
+        Text is never drawn upside down: a tick that runs right-to-left keeps
+        its value the right way up and hangs it back from the frame edge
+        instead.
+        """
+        x, y = start
+        stop_x, stop_y = stop
 
         self.msp.add_line((x, y), (stop_x, stop_y), dxfattribs={"color": 5})
 
-        if label:
-            angle = math.atan2(stop_y - y, stop_x - x)
-            ux, uy = math.cos(angle), math.sin(angle)  # along the line
-            nx, ny = -uy, ux  # perpendicular (left of direction)
+        if not label:
+            return
 
-            placement = (
-                x + ux * (height * 0.5) + nx * (height * 0.35),
-                y + uy * (height * 0.5) + ny * (height * 0.35),
-            )
-            self.msp.add_text(
-                label,
-                dxfattribs={
-                    "height": height,
-                    "color": 5,
-                    "style": "SURVEY_TEXT",
-                    "rotation": math.degrees(angle),
-                },
-            ).set_placement(placement, align=TextEntityAlignment.BOTTOM_LEFT)
+        angle = math.atan2(stop_y - y, stop_x - x)
+
+        # Keep the text within a readable half-turn. A tick pointing left or
+        # down would otherwise render the value mirrored.
+        reversed_run = not (-math.pi / 2 < angle <= math.pi / 2)
+        if reversed_run:
+            # Normalised rather than just rotated by pi, so a right-to-left
+            # tick records a rotation of 0 in the DXF instead of 360.
+            angle = math.atan2(-(stop_y - y), -(stop_x - x))
+
+        ux, uy = math.cos(angle), math.sin(angle)   # reading direction
+        nx, ny = -uy, ux                            # perpendicular, left of it
+
+        # The inset follows the tick itself, not the reading direction: on a
+        # right-to-left tick those are opposite, and following the text would
+        # push the value out through the frame border.
+        length = math.hypot(stop_x - x, stop_y - y) or 1.0
+        rx, ry = (stop_x - x) / length, (stop_y - y) / length
+
+        # Just clear of the line so the glyphs do not print through it, and
+        # set in from the frame edge so the value does not touch the border.
+        clearance = height * 0.2
+        inset = height * 0.3
+        placement = (x + rx * inset + nx * clearance,
+                     y + ry * inset + ny * clearance)
+        alignment = (TextEntityAlignment.BOTTOM_RIGHT if reversed_run
+                     else TextEntityAlignment.BOTTOM_LEFT)
+
+        self.msp.add_text(
+            label,
+            dxfattribs={
+                "height": height,
+                "color": 5,
+                "style": "SURVEY_TEXT",
+                "rotation": math.degrees(angle),
+            },
+        ).set_placement(placement, align=alignment)
 
     def draw_north_arrow_cross(self, x: float, y: float, length: float = 100.0):
-        x, y = x * self.scale, y * self.scale
-        length = length * self.scale
         half = length / 2
 
         self.msp.add_line((x - half, y), (x + half, y), dxfattribs={"color": 5})
@@ -355,20 +395,27 @@ class SurveyDXFManager:
     # ------------------------------------------------------------------
     # Graphical scale & title block
     # ------------------------------------------------------------------
-    def draw_graphical_scale(self, x: float, y: float, length: float = 1000.0):
+    def draw_graphical_scale(self, x: float, y: float, length: float = 1000.0,
+                             text_height: Optional[float] = None):
         """Draw a scale bar around ``length`` model-metres long at (x, y).
 
         The bar has 5 intervals; the interval is snapped to a 'nice' ground
         distance so the tick labels reflect true distances on the plan.
+
+        ``text_height`` sizes the tick labels in model units. Left unset they
+        fall back to a fraction of the bar, which goes unreadable on a short
+        bar -- callers should pass a printed size instead.
         """
         # Snap the interval to a nice ground distance and rebuild the length
         interval_m = nice_round(length / 5)
         length = interval_m * 5
 
-        X, Y = x * self.scale, y * self.scale
-        length = length * self.scale
         height = length * 0.05  # bar height, 5% of length
         interval = length / 5
+        if text_height is None or text_height <= 0:
+            text_height = height * 0.5
+        # Tick labels sit above the ticks, which rise to 1.5x the bar height.
+        label_y = height * 1.5 + text_height * 0.6
 
         block_name = f"GRAPHICAL_SCALE_{len(self.doc.blocks)}"
         block = self.doc.blocks.new(name=block_name)
@@ -400,8 +447,8 @@ class SurveyDXFManager:
 
             block.add_text(
                 text,
-                dxfattribs={"height": height * 0.5, "color": 7, "style": "SURVEY_TEXT"},
-            ).set_placement((tick_x, height * 2.3), align=alignment)
+                dxfattribs={"height": text_height, "color": 7, "style": "SURVEY_TEXT"},
+            ).set_placement((tick_x, label_y), align=alignment)
 
             if i == 5:
                 continue
@@ -423,15 +470,40 @@ class SurveyDXFManager:
                 hatch = block.add_hatch(color=7)
                 hatch.paths.add_polyline_path(corners)
 
-        return self.msp.add_blockref(block_name, (X, Y), dxfattribs={"layer": "TITLE_BLOCK"})
+        return self.msp.add_blockref(block_name, (x, y), dxfattribs={"layer": "TITLE_BLOCK"})
+
+    def text_width(self, text: str, height: float) -> float:
+        """Rendered width of a single-line string at ``height``, in model units.
+
+        Uses the drawing style's real font metrics (or a metric-compatible
+        substitute), so table cells are sized to the text that will actually be
+        drawn rather than to a per-character guess.
+        """
+        font_file = "txt"
+        if "SURVEY_TEXT" in self.doc.styles:
+            font_file = self.doc.styles.get("SURVEY_TEXT").dxf.font or "txt"
+        return self._measurement_font(font_file, height).text_width(str(text))
+
+    def measure_mtext(self, text: str, char_height: float, width: float) -> Tuple[float, float]:
+        """Rendered (width, height) of an MTEXT in model units.
+
+        Used to reserve exactly as much sheet as the title stack needs before
+        anything is placed, instead of assuming a fixed fraction and having a
+        long title spill into the drawing.
+        """
+        scratch = self.doc.blocks.new(name=f"MEASURE_{uuid.uuid4().hex[:8]}")
+        mtext = scratch.add_mtext(text, dxfattribs={"style": "SURVEY_TEXT"})
+        mtext.dxf.char_height = char_height
+        mtext.dxf.width = width
+        size = mtext_size(mtext)
+        self.doc.blocks.delete_block(scratch.name, safe=False)
+        return size.total_width, size.total_height
 
     def draw_title_block(self, text: str, x: float, y: float, width: float,
                          title_height: float = 1.0, graphical_scale_length: float = 1000.0,
-                         origin: str = "", area: str = "", notes: Optional[List[str]] = None):
-        x, y = x * self.scale, y * self.scale
-        title_height = title_height * self.scale
-        width = width * self.scale
-        graphical_scale_length = graphical_scale_length * self.scale
+                         origin: str = "", area: str = "", notes: Optional[List[str]] = None,
+                         note_height: Optional[float] = None,
+                         scale_text_height: Optional[float] = None):
 
         block = self.doc.blocks.new(name="TITLE_BLOCK")
         title_mtext = block.add_mtext(
@@ -442,25 +514,38 @@ class SurveyDXFManager:
         title_mtext.dxf.char_height = title_height
         title_mtext.dxf.width = width
 
-        title_ref = self.msp.add_blockref("TITLE_BLOCK", (x, y), dxfattribs={"layer": "TITLE_BLOCK"})
+        self.msp.add_blockref("TITLE_BLOCK", (x, y), dxfattribs={"layer": "TITLE_BLOCK"})
 
-        title_box = bbox.extents(title_ref.virtual_entities())
-        title_min_y = title_box.extmin.y
-        title_min_x = title_box.extmin.x
-        title_max_x = title_box.extmax.x
+        # Measure the wrapped text rather than the block's bounding box:
+        # bbox.extents() estimates MTEXT from its definition and comes up a
+        # full line short once the title wraps, which used to drop the
+        # graphical scale on top of the last title line.
+        title_size = mtext_size(title_mtext)
+        title_min_y = y - title_size.total_height
+        title_min_x = x - title_size.total_width / 2
+        title_max_x = x + title_size.total_width / 2
 
         # draw_graphical_scale snaps the bar to a nice round interval, so
         # center using the length that will actually be drawn.
-        graphical_scale_length = nice_round((graphical_scale_length / self.scale) / 5) * 5 * self.scale
+        graphical_scale_length = nice_round(graphical_scale_length / 5) * 5
 
         title_center_x = (title_min_x + title_max_x) / 2
         graphical_x = title_center_x - (graphical_scale_length / 2)
 
+        # Clear the title by the full height of the bar's own stack: the tick
+        # labels sit above the bar, so placing the bar itself just below the
+        # title would run those labels straight into it.
+        bar_height = graphical_scale_length * 0.05
+        if scale_text_height is None or scale_text_height <= 0:
+            scale_text_height = bar_height * 0.5
+        bar_stack = bar_height * 1.5 + scale_text_height * 2.8
+
         # graphical scale below the title
         graphical_ref = self.draw_graphical_scale(
-            graphical_x / self.scale,
-            (title_min_y - (graphical_scale_length * 0.05 * 3)) / self.scale,
-            graphical_scale_length / self.scale,
+            graphical_x,
+            title_min_y - bar_stack,
+            graphical_scale_length,
+            text_height=scale_text_height,
         )
         graphical_box = bbox.extents(graphical_ref.virtual_entities())
         graphical_min_y = graphical_box.extmin.y
@@ -482,9 +567,9 @@ class SurveyDXFManager:
             dxfattribs={"style": "SURVEY_TEXT"},
         )
         origin_mtext.dxf.attachment_point = ezdxf.enums.MTextEntityAlignment.TOP_CENTER
-        origin_mtext.dxf.char_height = title_height
+        origin_mtext.dxf.char_height = note_height if note_height else title_height
         origin_mtext.dxf.width = width
-        origin_mtext.set_location((x, graphical_min_y - ((graphical_scale_length * 0.05) / 3)))
+        origin_mtext.set_location((x, graphical_min_y - bar_height))
 
     # ------------------------------------------------------------------
     # Frames & footers
@@ -498,10 +583,6 @@ class SurveyDXFManager:
         ``top_inset`` reserves space below the box's top edge (e.g. for the
         plan number) before the footer text starts.
         """
-        font_size = font_size * self.scale
-        top_inset = top_inset * self.scale
-        min_x, min_y = min_x * self.scale, min_y * self.scale
-        max_x, max_y = max_x * self.scale, max_y * self.scale
 
         box_width = max_x - min_x
         box_height = max_y - min_y
@@ -542,8 +623,6 @@ class SurveyDXFManager:
 
     def draw_frame(self, min_x, min_y, max_x, max_y):
         """Draw a rectangular frame given min and max coordinates."""
-        min_x, min_y = min_x * self.scale, min_y * self.scale
-        max_x, max_y = max_x * self.scale, max_y * self.scale
 
         self.msp.add_lwpolyline(
             [(min_x, min_y), (max_x, min_y), (max_x, max_y), (min_x, max_y)],
@@ -552,16 +631,17 @@ class SurveyDXFManager:
 
     def draw_table(self, x: float, y: float, rows: List[List[str]],
                    col_widths: List[float], row_height: float,
-                   text_height: float = 1.0, layer: str = "TEXT"):
+                   text_height: float = 1.0, layer: str = "TEXT",
+                   span_rows: Optional[set] = None):
         """Draw a simple grid table with (x, y) as its top-left corner.
 
         ``rows`` is a list of rows; each row is a list of cell strings.
-        ``col_widths`` and ``row_height`` are in model units.
+        ``col_widths`` and ``row_height`` are in model units. Rows listed in
+        ``span_rows`` run the full width of the table -- the column dividers
+        stop above and below them -- which is how a schedule's title row is
+        drawn.
         """
-        x, y = x * self.scale, y * self.scale
-        col_widths = [w * self.scale for w in col_widths]
-        row_height = row_height * self.scale
-        text_height = text_height * self.scale
+        span_rows = span_rows or set()
 
         table_width = sum(col_widths)
         table_height = row_height * len(rows)
@@ -577,11 +657,22 @@ class SurveyDXFManager:
             line_y = y - i * row_height
             self.msp.add_line((x, line_y), (x + table_width, line_y), dxfattribs={"layer": layer})
 
-        # vertical lines
+        # Vertical dividers, broken across any row that spans the table.
         cx = x
         for width in col_widths[:-1]:
             cx += width
-            self.msp.add_line((cx, y), (cx, y - table_height), dxfattribs={"layer": layer})
+            run_start = None
+            for i in range(len(rows) + 1):
+                spans = i < len(rows) and i in span_rows
+                if not spans and run_start is None:
+                    run_start = i
+                if (spans or i == len(rows)) and run_start is not None:
+                    self.msp.add_line(
+                        (cx, y - run_start * row_height),
+                        (cx, y - i * row_height),
+                        dxfattribs={"layer": layer},
+                    )
+                    run_start = None
 
         # cell text (left-aligned, vertically centered)
         padding = text_height * 0.4
@@ -604,8 +695,6 @@ class SurveyDXFManager:
     # ------------------------------------------------------------------
     def draw_topo_point(self, x: float, y: float, z: float = 0,
                         label: Optional[str] = None, text_height: float = 1.0):
-        x, y, z = x * self.scale, y * self.scale, z * self.scale
-        text_height = text_height * self.scale
 
         self.msp.add_blockref("TOPO_POINT", (x, y, z), dxfattribs={"layer": "SPOT_HEIGHTS"})
 
@@ -621,25 +710,20 @@ class SurveyDXFManager:
                 },
             ).set_placement((x + offset, y + offset, z + offset))
 
-    def _scale3d(self, points: List[Tuple[float, float, float]]):
-        return [(x * self.scale, y * self.scale, z * self.scale) for x, y, z in points]
-
     def add_tin_mesh(self, points: List[Tuple[float, float, float]]):
-        self.msp.add_polyline3d(self._scale3d(points), dxfattribs={"layer": "TIN_MESH"})
+        self.msp.add_polyline3d(points, dxfattribs={"layer": "TIN_MESH"})
 
     def add_grid_mesh(self, points: List[Tuple[float, float, float]]):
-        self.msp.add_polyline3d(self._scale3d(points), dxfattribs={"layer": "GRID_MESH"})
+        self.msp.add_polyline3d(points, dxfattribs={"layer": "GRID_MESH"})
 
     def add_grid_mesh_border(self, points: List[Tuple[float, float, float]]):
         self.msp.add_polyline3d(
-            self._scale3d(points),
+            points,
             dxfattribs={"layer": "GRID_MESH", "lineweight": 25},
         )
 
     def add_grid_mesh_label(self, x: float, y: float, z: float, label: str,
                             text_height: float = 1.0, rotation: float = 0.0):
-        x, y, z = x * self.scale, y * self.scale, z * self.scale
-        text_height = text_height * self.scale
 
         self.msp.add_text(label, dxfattribs={
             "layer": "GRID_MESH",
@@ -649,15 +733,12 @@ class SurveyDXFManager:
         }).set_placement((x, y, z))
 
     def add_3d_contour(self, points: List[Tuple[float, float, float]], layer: str = "CONTOUR_MINOR"):
-        self.msp.add_polyline3d(self._scale3d(points), dxfattribs={"layer": layer})
+        self.msp.add_polyline3d(points, dxfattribs={"layer": layer})
 
     def add_spline(self, points: List[Tuple[float, float, float]], layer: str = "CONTOUR_MINOR"):
-        self.msp.add_spline(self._scale3d(points), degree=3, dxfattribs={"layer": layer})
+        self.msp.add_spline(points, degree=3, dxfattribs={"layer": layer})
 
     def add_contour_label(self, x: float, y: float, z: float, label: str, text_height: float = 1.0):
-        x, y, z = x * self.scale, y * self.scale, z * self.scale
-        text_height = text_height * self.scale
-
         self.msp.add_text(label, dxfattribs={
             "layer": "CONTOUR_LABELS",
             "height": text_height,
@@ -668,20 +749,19 @@ class SurveyDXFManager:
     # ------------------------------------------------------------------
     def add_grid_line(self, x1: float, y1: float, x2: float, y2: float):
         self.msp.add_line(
-            (x1 * self.scale, y1 * self.scale),
-            (x2 * self.scale, y2 * self.scale),
+            (x1, y1),
+            (x2, y2),
             dxfattribs={"layer": "GRID"},
         )
 
     def add_f_grid_line(self, x1: float, y1: float, x2: float, y2: float):
         self.msp.add_line(
-            (x1 * self.scale, y1 * self.scale),
-            (x2 * self.scale, y2 * self.scale),
+            (x1, y1),
+            (x2, y2),
             dxfattribs={"layer": "F-GRID"},
         )
 
     def add_profile(self, points: List[Tuple[float, float]]):
-        points = [(x * self.scale, y * self.scale) for x, y in points]
         self.msp.add_spline(points, dxfattribs={"layer": "PROFILE"})
 
     # ------------------------------------------------------------------
@@ -790,7 +870,26 @@ class SurveyDXFManager:
         self.fix_justified_text_insert_points()
         self.doc.saveas(filepath)
 
-    def save_pdf(self, filepath: Optional[str] = None, paper_size: str = "A4", orientation: str = "portrait"):
+    def save_pdf(self, filepath: Optional[str] = None, paper_size: str = "A4",
+                 orientation: str = "portrait", scale: Optional[float] = None):
+        """Render the modelspace to a PDF.
+
+        ``scale`` is the printed millimetres per model unit -- ``1000/500 = 2``
+        for a 1:500 plan drawn in metres. When given, the sheet is plotted at
+        exactly that scale, so a distance measured on the paper is the real
+        ground distance divided by the scale denominator. When it is ``None``
+        the content is fitted to the page instead (used by route sheets, whose
+        horizontal and vertical scales differ and so have no single map
+        scale).
+
+        Known limitation: the PyMuPDF backend writes the page box in whole
+        points (A4 becomes 595 x 841 pt instead of 595.276 x 841.890), so the
+        rendered content is uniformly 0.106% smaller than the true scale --
+        0.13 mm over a 120 mm distance. The DXF and DWG carry exact true
+        coordinates and are unaffected; on the PDF the graphical scale bar is
+        rendered in the same space, so measuring against the bar cancels the
+        error out.
+        """
         width, height = PAPER_SIZES.get(paper_size.upper(), PAPER_SIZES["A4"])
         if orientation.lower() == "landscape":
             width, height = height, width
@@ -801,12 +900,17 @@ class SurveyDXFManager:
         frontend = Frontend(context, backend, config=cfg)
         frontend.draw_layout(self.msp)
 
-        page = layout.Page(width, height, layout.Units.mm, margins=layout.Margins.all(20))
+        page = layout.Page(width, height, layout.Units.mm,
+                           margins=layout.Margins.all(PAGE_MARGIN_MM))
+        if scale is None:
+            settings = layout.Settings(fit_page=True)
+        else:
+            settings = layout.Settings(fit_page=False, scale=scale)
 
         if not filepath:
             filepath = f"{self.get_filename()}.pdf"
 
-        pdf_bytes = backend.get_pdf_bytes(page)
+        pdf_bytes = backend.get_pdf_bytes(page, settings=settings)
         with open(filepath, "wb") as f:
             f.write(pdf_bytes)
 
@@ -817,7 +921,7 @@ class SurveyDXFManager:
         odafc.convert(dxf_filepath, filepath, version=self.dxf_version)
 
     def save(self, paper_size: str = "A4", orientation: str = "portrait",
-             extra_files: Optional[dict] = None) -> str:
+             extra_files: Optional[dict] = None, scale: Optional[float] = None) -> str:
         """Export DXF + DWG + PDF, zip them, and upload the archive.
 
         ``extra_files`` maps file names to text content and is bundled into
@@ -833,7 +937,8 @@ class SurveyDXFManager:
 
             self.save_dxf(dxf_path)
             self.save_dwg(dxf_path, dwg_path)
-            self.save_pdf(pdf_path, paper_size=paper_size, orientation=orientation)
+            self.save_pdf(pdf_path, paper_size=paper_size, orientation=orientation,
+                          scale=scale)
 
             with zipfile.ZipFile(zip_path, "w") as zipf:
                 zipf.write(dxf_path, os.path.basename(dxf_path))

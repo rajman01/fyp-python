@@ -1,0 +1,42 @@
+# Local development stack for the drawing engine.
+#
+# The ODA File Converter is an x86-64 AppImage and is executed during the image
+# build, so the image must be built for linux/amd64 even on an arm64 host --
+# it runs under emulation there. Without this the build fails outright.
+#
+#   docker compose build
+#   docker compose up                     # serve on http://localhost:8080
+#   docker compose run --rm engine python tests/smoke_test.py
+#   docker compose run --rm engine python tests/cad_import_test.py
+#
+# Host port 8080 often clashes with another stack; override it with
+#   ENGINE_PORT=8081 docker compose up
+#
+# The source tree is mounted over /app, so code changes need no rebuild.
+
+services:
+  engine:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    platform: linux/amd64
+    image: autoplan-python:local
+    ports:
+      # Host port is overridable -- 8080 frequently clashes with other stacks.
+      - "${ENGINE_PORT:-8080}:8080"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      PORT: "8080"
+      # Plan generation is CPU-heavy and emulated x86 is slow; keep the
+      # request timeout generous for local work.
+      GUNICORN_TIMEOUT: "600"
+      # Background jobs report progress into the API's Redis job record, so the
+      # engine needs to reach the same Redis. On Docker Desktop / OrbStack the
+      # host is host.docker.internal; override for other setups.
+      REDIS_URI: "${REDIS_URI:-redis://host.docker.internal:6379}"
+    volumes:
+      - .:/app
+      # Sample CAD drawings for the legacy-import work (Task 11).
+      - ./fixtures:/fixtures

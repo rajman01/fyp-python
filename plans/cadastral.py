@@ -8,12 +8,13 @@ from typing import ClassVar, Optional
 
 from dxf_manager import SurveyDXFManager
 from models.plan import CoordinateProps, PlanType
-from plans.base import BasePlan
+from plans.base import BasePlan, TableSpec
 from utils import polygon_orientation
 
 
 class CadastralPlan(BasePlan):
     expected_type: ClassVar[PlanType] = PlanType.CADASTRAL
+    draws_north_arrow: ClassVar[bool] = True
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -21,7 +22,7 @@ class CadastralPlan(BasePlan):
 
     def _setup_layers(self, drawer: SurveyDXFManager):
         drawer.setup_cadastral_layers()
-        drawer.setup_beacon_style(self.beacon_type, self.beacon_size)
+        drawer.setup_beacon_style(self.beacon_type, self.beacon_symbol_size)
 
     def _area_text(self) -> str:
         if self.parcels and self.parcels[0].area is not None:
@@ -33,11 +34,25 @@ class CadastralPlan(BasePlan):
             return None
         return self._coord_dict.get(self.parcels[0].ids[0])
 
+    def _bearing_distance_table(self):
+        """Legs of every parcel on the plan."""
+        rows = []
+        for parcel in self.parcels or []:
+            rows.extend(self._leg_rows(parcel.legs))
+        return TableSpec("BEARING & DISTANCE", ["LINE", "BEARING", "DIST. (M)"], rows)
+
+    def _coordinate_table(self):
+        """The beacon register."""
+        return TableSpec(
+            "COORDINATES", ["STN", "NORTHING", "EASTING"],
+            self._coordinate_rows(self.coordinates),
+        )
+
     def draw_beacons(self):
+        height = self.height("beacon_label", self.label_size)
         for coord in self.coordinates or []:
             self._drawer.draw_beacon(
-                coord.easting, coord.northing, 0,
-                self.label_size, self._get_drawing_extent(), coord.id,
+                coord.easting, coord.northing, 0, height, coord.id,
             )
 
     def draw_parcels(self):
@@ -64,4 +79,5 @@ class CadastralPlan(BasePlan):
         self.draw_frames()
         self.draw_title_block()
         self.draw_footer_boxes()
+        self.draw_tables()
         self.draw_north_arrow()

@@ -6,6 +6,7 @@ Contour extraction uses contourpy directly, which keeps the service free of
 matplotlib's global figure state (important for a long-running server).
 """
 
+import logging
 import math
 from typing import ClassVar, List, Optional, Tuple
 
@@ -18,13 +19,25 @@ from scipy.spatial import Delaunay
 from shapely.geometry import MultiPoint, Polygon
 
 from dxf_manager import SurveyDXFManager
-from models.plan import CoordinateProps, PlanType
-from plans.base import BasePlan
+from models.plan import (
+    CONTOUR_GRID_CELL_MM,
+    CONTOUR_GRID_MAX,
+    CONTOUR_GRID_MIN,
+    SPOT_HEIGHT_SPACING_MM,
+    TOPO_POINT_SYMBOL_MM,
+    CoordinateProps,
+    PlanType,
+)
+from point_stream import thin_for_display
+
+logger = logging.getLogger(__name__)
+from plans.base import BasePlan, TableSpec
 from utils import polygon_orientation
 
 
 class TopographicPlan(BasePlan):
     expected_type: ClassVar[PlanType] = PlanType.TOPOGRAPHIC
+    draws_north_arrow: ClassVar[bool] = True
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -40,8 +53,14 @@ class TopographicPlan(BasePlan):
 
     def _setup_layers(self, drawer: SurveyDXFManager):
         drawer.setup_topographic_layers()
-        drawer.setup_beacon_style(self.beacon_type, self.beacon_size)
-        drawer.setup_topo_point_style(size=0.5 * self.topographic_setting.point_label_scale)
+        drawer.setup_beacon_style(self.beacon_type, self.beacon_symbol_size)
+        drawer.setup_topo_point_style(size=self._topo_point_symbol_size())
+
+    def _topo_point_symbol_size(self) -> float:
+        """Arm length of the spot-height cross, in model units."""
+        if self.auto_scale_sizes and self.true_scale:
+            return TOPO_POINT_SYMBOL_MM * self.mm_to_model
+        return 0.5 * self.topographic_setting.point_label_scale
 
     def _area_text(self) -> str:
         if self.topographic_boundary and self.topographic_boundary.area is not None:
@@ -63,12 +82,33 @@ class TopographicPlan(BasePlan):
         draws_contours = settings.show_contours and (settings.tin or settings.grid)
         if draws_contours and settings.contour_interval > 0:
             interval = f"{settings.contour_interval:g}"
-            return [f"CONTOUR INTERVAL :- {interval} M"]
-        return []
+            notes = [f"CONTOUR INTERVAL :- {interval} M"]
+        else:
+            notes = []
+
+        drawn = len(self.visible_spot_heights()) if settings.show_spot_heights else 0
+        total = self.total_survey_points()
+        if settings.show_spot_heights and total > drawn:
+            notes.append(f"SPOT HEIGHTS SHOWN :- {drawn:,} OF {total:,}")
+        return notes
 
     # ------------------------------------------------------------------
     # Points & boundary
     # ------------------------------------------------------------------
+    def _bearing_distance_table(self):
+        """Legs of the perimeter (boundary) survey."""
+        boundary = self.topographic_boundary
+        legs = boundary.legs if boundary else []
+        return TableSpec("BOUNDARY BEARING & DISTANCE",
+                         ["LINE", "BEARING", "DIST. (M)"], self._leg_rows(legs))
+
+    def _coordinate_table(self):
+        """The boundary beacon register."""
+        boundary = self.topographic_boundary
+        coords = boundary.coordinates if boundary else []
+        return TableSpec("BOUNDARY COORDINATES", ["STN", "NORTHING", "EASTING"],
+                         self._coordinate_rows(coords))
+
     def draw_beacons(self):
         if not self.topographic_boundary:
             return
@@ -80,15 +120,43 @@ class TopographicPlan(BasePlan):
             seen.add(coord.id)
             self._drawer.draw_beacon(
                 coord.easting, coord.northing, 0,
-                self.label_size, self._get_drawing_extent(), coord.id,
+                self.height("beacon_label", self.label_size), coord.id,
             )
 
+    def visible_spot_heights(self) -> list:
+        """Spot heights thinned to what the sheet can legibly carry.
+
+        Elevation labels have a fixed printed size, so the sheet holds a fixed
+        number of them regardless of scale -- roughly 1,800 on A4. A survey of
+        a million points would otherwise emit two million DXF entities to
+        render an unreadable smear, so the drawn set is thinned to a minimum
+        printed spacing. The full survey is unaffected: it is still what the
+        contours are interpolated from, and what the export carries.
+        """
+        points = self.coordinates or []
+        spacing = SPOT_HEIGHT_SPACING_MM * self.mm_to_model
+        return thin_for_display(
+            points, spacing, lambda c: (c.easting, c.northing),
+        )
+
     def draw_topo_points(self):
-        for coord in self.coordinates or []:
+        visible = self.visible_spot_heights()
+        text_height = self.height("spot_height", self.topographic_setting.point_label_scale)
+        for coord in visible:
             self._drawer.draw_topo_point(
                 coord.easting, coord.northing, coord.elevation,
-                f"{coord.elevation}", self.topographic_setting.point_label_scale,
+                f"{coord.elevation}", text_height,
             )
+
+        drawn, total = len(visible), self.total_survey_points()
+        if total > drawn:
+            logger.info("drawing %s of %s spot heights at 1:%s",
+                        f"{drawn:,}", f"{total:,}", int(self.scale))
+
+    def total_survey_points(self) -> int:
+        """Points in the survey, including any thinned away before arrival."""
+        return max(int(self.point_totals.get("coordinates", 0)),
+                   len(self.coordinates or []))
 
     def draw_boundary(self):
         if not self.topographic_boundary:
@@ -118,8 +186,22 @@ class TopographicPlan(BasePlan):
 
         self._generate_contours(grid_x, grid_y, grid_z)
 
-    def generate_grid_contours(self, grid_size: int = 100, smoothing: float = 1.0):
+    def contour_grid_size(self) -> int:
+        """Interpolation grid resolution for this sheet.
+
+        Sized from what the paper resolves rather than fixed at 100: a cell of
+        `CONTOUR_GRID_CELL_MM` printed means a small site is not over-sampled
+        and a large one is not under-sampled, and the cost tracks the sheet
+        instead of the survey extent.
+        """
+        min_x, min_y, max_x, max_y = self._bounding_box
+        span = max(max_x - min_x, max_y - min_y, 1e-6)
+        cell = CONTOUR_GRID_CELL_MM * self.mm_to_model
+        return int(min(max(span / cell, CONTOUR_GRID_MIN), CONTOUR_GRID_MAX))
+
+    def generate_grid_contours(self, grid_size: Optional[int] = None, smoothing: float = 1.0):
         """Generate contours from cubic interpolation over a regular grid."""
+        grid_size = grid_size or self.contour_grid_size()
         xi = np.linspace(self._x.min(), self._x.max(), int(grid_size))
         yi = np.linspace(self._y.min(), self._y.max(), int(grid_size))
         grid_x, grid_y = np.meshgrid(xi, yi)
@@ -147,6 +229,22 @@ class TopographicPlan(BasePlan):
             triangle.append(triangle[0])  # close the triangle
             self._drawer.add_tin_mesh(triangle)
 
+    def _reference_grid_drawn(self) -> bool:
+        settings = self.topographic_setting
+        if settings is None:
+            return False
+        return bool(settings.show_grid or (settings.show_mesh and settings.grid))
+
+    def _origin_value_ceiling(self, default: float) -> float:
+        # The reference grid hangs its own "E: ..." labels just under the
+        # data, in the same strip the origin easting climbs through, so the
+        # origin value stops below them.
+        if not self._reference_grid_drawn():
+            return default
+        label_h = self.height("grid_label", 2)
+        return default - label_h - self._drawer.text_width(
+            f"E: {default:.2f}", label_h)
+
     def draw_reference_grid(self, grid_size: int = 100, step: int = 5):
         """Draw a rectangular coordinate grid with easting/northing labels,
         spanning the extent of the survey points at their mean elevation."""
@@ -158,19 +256,28 @@ class TopographicPlan(BasePlan):
         x_min, x_max = grid_x.min(), grid_x.max()
         y_min, y_max = grid_y.min(), grid_y.max()
 
+        # Label height and its clearance from the grid edge are printed sizes,
+        # so the annotation reads the same on paper at any scale.
+        label_h = self.height("grid_label", 2)
+        lead = label_h  # gap between the grid edge and the label
+
         # Horizontal lines (constant northing) with labels at both edges
         for i in range(0, grid_x.shape[0], step):
             northing = grid_y[i, 0]
             self._drawer.add_grid_mesh([(x_min, northing, z_grid), (x_max, northing, z_grid)])
-            self._drawer.add_grid_mesh_label(x_min - 2, northing, z_grid, f"N: {northing:.2f}", 2, rotation=0)
-            self._drawer.add_grid_mesh_label(x_max + 1, northing, z_grid, f"{northing:.2f}", 2, rotation=0)
+            self._drawer.add_grid_mesh_label(x_min - lead, northing, z_grid,
+                                             f"N: {northing:.2f}", label_h, rotation=0)
+            self._drawer.add_grid_mesh_label(x_max + lead / 2, northing, z_grid,
+                                             f"{northing:.2f}", label_h, rotation=0)
 
         # Vertical lines (constant easting) with labels at both edges
         for j in range(0, grid_x.shape[1], step):
             easting = grid_x[0, j]
             self._drawer.add_grid_mesh([(easting, y_min, z_grid), (easting, y_max, z_grid)])
-            self._drawer.add_grid_mesh_label(easting, y_min - 2, z_grid, f"E: {easting:.2f}", 2, rotation=90)
-            self._drawer.add_grid_mesh_label(easting, y_max + 1, z_grid, f"{easting:.2f}", 2, rotation=90)
+            self._drawer.add_grid_mesh_label(easting, y_min - lead, z_grid,
+                                             f"E: {easting:.2f}", label_h, rotation=90)
+            self._drawer.add_grid_mesh_label(easting, y_max + lead / 2, z_grid,
+                                             f"{easting:.2f}", label_h, rotation=90)
 
         # Border and corner coordinates
         self._drawer.add_grid_mesh_border([
@@ -182,9 +289,11 @@ class TopographicPlan(BasePlan):
         ])
 
         for x, y in ((x_min, y_min), (x_max, y_min), (x_max, y_max), (x_min, y_max)):
-            self._drawer.add_grid_mesh_label(x, y, z_grid, f"({x:.1f}, {y:.1f})", 2, rotation=0)
+            self._drawer.add_grid_mesh_label(x, y, z_grid, f"({x:.1f}, {y:.1f})",
+                                             label_h, rotation=0)
 
-    def _create_interpolation_grid(self, interpolator, grid_size: int = 100):
+    def _create_interpolation_grid(self, interpolator, grid_size: Optional[int] = None):
+        grid_size = grid_size or self.contour_grid_size()
         xi = np.linspace(self._x.min(), self._x.max(), grid_size)
         yi = np.linspace(self._y.min(), self._y.max(), grid_size)
         grid_x, grid_y = np.meshgrid(xi, yi)
@@ -276,7 +385,7 @@ class TopographicPlan(BasePlan):
     def _add_contour_label(self, x: float, y: float, elevation: float):
         self._drawer.add_contour_label(
             x, y, elevation, f"{elevation:.2f}",
-            self.topographic_setting.contour_label_scale,
+            self.height("contour_label", self.topographic_setting.contour_label_scale),
         )
 
     def draw_topo_map(self):
@@ -285,7 +394,7 @@ class TopographicPlan(BasePlan):
         if settings.tin:
             self.generate_tin_contours(1.5)
         if settings.grid:
-            self.generate_grid_contours(100, 1.5)
+            self.generate_grid_contours(smoothing=1.5)
 
         # TIN mesh and coordinate grid are optional sheet overlays, switchable
         # independently of the contour method. `show_mesh` is the legacy single
@@ -314,4 +423,5 @@ class TopographicPlan(BasePlan):
         self.draw_title_block()
         self.draw_footer_boxes()
         self.draw_topo_map()
+        self.draw_tables()
         self.draw_north_arrow()

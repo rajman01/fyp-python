@@ -48,6 +48,11 @@ CHAR_W = 0.85
 class RoutePlan(BasePlan):
     expected_type: ClassVar[PlanType] = PlanType.ROUTE
 
+    #: A route sheet is a profile, not a map: chainage and elevation are drawn
+    #: at independent horizontal and vertical scales, so there is no single
+    #: map scale to plot at. The sheet stays fitted to its content.
+    true_scale: ClassVar[bool] = False
+
     # ------------------------------------------------------------------
     # Sheet geometry
     # ------------------------------------------------------------------

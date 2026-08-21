@@ -5,10 +5,12 @@ These models define the JSON contract between this service and its callers
 """
 
 from enum import Enum
-from typing import List, Optional, Union
+from typing import Dict, List, Optional, Union
 from datetime import datetime
 from pydantic import BaseModel, Field, model_validator
 from bs4 import BeautifulSoup
+
+from dxf_manager import PAGE_MARGIN_MM, PAPER_SIZES
 
 
 # ---------- Enums ----------
@@ -53,6 +55,147 @@ def origin_display_name(origin) -> str:
         return ""
     value = str(value)
     return PLAN_ORIGIN_DISPLAY_NAMES.get(value, value.replace("_", " ").title())
+
+
+#: Printed text heights in millimetres, per element class.
+#:
+#: These are *paper* sizes: the model-unit height is resolved at draw time as
+#: ``mm * scale / 1000`` (see :meth:`PlanProps.text_height`), so selecting a
+#: scale automatically yields a legible plan without re-editing text in CAD.
+#:
+#: The values come from the surveyor's reference ranges, quoted as model units
+#: at 1:500 (1 m at 1:500 prints at 2 mm):
+#:
+#:   * bearing/distance 1.0-1.3 m  -> 2.0-2.6 mm  (2.5 mm here)
+#:   * quoted coordinates 1.5-2 m  -> 3.0-4.0 mm  (3.5 mm here)
+#:
+#: The remaining classes are anchored to those two: title text is the largest
+#: element on the sheet, the plan number reads at coordinate size, and the
+#: dense annotation (spot heights, contour labels) sits at the small end where
+#: testers already confirmed the printed size in the Task 6 review.
+TEXT_HEIGHTS_MM = {
+    "title": 5.0,           # plan title, address, state, scale line
+    "title_note": 3.5,      # area / origin / notes under the graphical scale
+    "scale_bar": 1.8,       # graphical scale tick labels
+    "bearing_distance": 2.5,  # leg distance and bearing labels
+    "quoted_coordinate": 3.5,  # the mE / mN values quoted along the frame
+    "beacon_label": 2.5,    # beacon / station identifiers
+    "plan_number": 3.5,     # PLAN No:- in the footer band
+    "surveyor_name": 2.5,   # footer box text (surveyor's name, credits)
+    "spot_height": 1.5,     # topographic spot elevations
+    "contour_label": 1.8,   # contour value labels
+    "grid_label": 2.0,      # reference-grid coordinate labels
+    "table": 2.0,           # schedule / table cell text
+    "general": 2.5,         # anything not otherwise classified
+}
+
+#: Which of the app's four size controls governs each text class.
+#:
+#: The controls are labelled Title Size, Label Size and Footer Size (plus
+#: Beacon Size for the symbols), so each one moves its own group and nothing
+#: else. Within a group the surveyor's designed ratios from
+#: :data:`TEXT_HEIGHTS_MM` are preserved -- the control scales the group
+#: together rather than flattening it to one height.
+TEXT_GROUPS = {
+    "title": "title",
+    "title_note": "title",
+    "scale_bar": "title",
+    "bearing_distance": "annotation",
+    "quoted_coordinate": "annotation",
+    "beacon_label": "annotation",
+    "spot_height": "annotation",
+    "contour_label": "annotation",
+    "grid_label": "annotation",
+    "table": "annotation",
+    "general": "annotation",
+    "plan_number": "footer",
+    "surveyor_name": "footer",
+}
+
+#: The element each control is read as the printed height of.
+GROUP_REFERENCE = {
+    "title": "title",
+    "annotation": "general",
+    "footer": "surveyor_name",
+}
+
+#: Below this, a ``*_size`` field is not a printed millimetre size.
+#:
+#: These fields carried ground metres before Task 8 -- ``label_size`` 1.0,
+#: ``footer_size`` 0.5, ``beacon_size`` 0.18 -- and the API also wrote
+#: extent-derived fractions into them. All of those are far under any usable
+#: printed size, so a value this small is read as "not set" and the designed
+#: default is used. Old plans keep rendering correctly without a migration.
+LEGACY_SIZE_MM = 2.0
+
+#: The same rule for the beacon symbol, which is legitimately smaller than any
+#: text: 1.6 mm is its designed size, while the legacy ground-metre values sat
+#: at 0.15-0.3.
+LEGACY_BEACON_MM = 0.5
+
+#: Ceiling for the beacon symbol, so a stale value cannot blot out the sheet.
+BEACON_SYMBOL_MAX_MM = 8.0
+
+#: ``font_size`` is read as the printed height of the plan title, in
+#: millimetres, and every other text element scales in proportion. Before this
+#: the scale-driven table ignored ``font_size`` entirely, so the embellishment
+#: control in the app did nothing -- 12 and 5.5 produced identical sheets.
+#:
+#: Clamped, because the field has carried very different meanings over time
+#: (model units, an API-computed fraction of the drawing extent) and a stale
+#: 0.2 or 100 would otherwise render a plan unreadable rather than merely
+#: mis-sized.
+FONT_SIZE_MIN_MM = 2.0
+FONT_SIZE_MAX_MM = 14.0
+
+#: Height of the address / local government / state / scale lines relative to
+#: the title itself. A plan title is a heading; the lines under it are not, and
+#: setting them all at one size is what made the title block swallow the sheet.
+SUBTITLE_HEIGHT_FACTOR = 0.68
+
+#: Printed size of the beacon symbol in millimetres. Testers settled on this
+#: in the Task 3 review ("the beacon symbols are too large"): a neat point
+#: marker just above the small annotation sizes.
+BEACON_SYMBOL_MM = 1.6
+
+#: Printed size (arm length) of the topographic spot-height cross.
+TOPO_POINT_SYMBOL_MM = 1.0
+
+#: Schedule tables drawn on the sheet (Task 10): row pitch as a multiple of
+#: the cell text height, a generous per-character width estimate so text never
+#: spills its cell, and the printed gap between the drawing, the table band,
+#: and adjacent table columns.
+TABLE_ROW_SPACING = 2.2
+#: Cell padding either side of the text, as a multiple of the text height.
+#: Matches the padding ``SurveyDXFManager.draw_table`` insets its text by.
+TABLE_CELL_PADDING = 0.4
+TABLE_GAP_MM = 5.0
+
+#: Decimal places for coordinates and distances in the on-sheet tables. No
+#: thousands separator anywhere -- surveyors do not write coordinates that way
+#: and a comma breaks a copy/paste into CAD (see Task 4).
+TABLE_COORDINATE_DECIMALS = 3
+TABLE_DISTANCE_DECIMALS = 2
+
+#: Minimum printed spacing between drawn spot heights, in millimetres. An A4
+#: sheet is about 43,700 square millimetres and an elevation label needs
+#: roughly 24 of them to stay readable, so a sheet carries on the order of
+#: 1,800 labels however many points the survey holds. Drawing every point of a
+#: large survey produces an unopenable file rendering an unreadable sheet, so
+#: the drawn set is thinned to this spacing and the sheet says how many of the
+#: total it shows.
+SPOT_HEIGHT_SPACING_MM = 9.0
+
+#: Interpolation grid cell, in printed millimetres. The grid only has to
+#: resolve what the paper can show; a fixed cell count wastes work on a small
+#: site and under-samples a large one.
+CONTOUR_GRID_CELL_MM = 0.75
+CONTOUR_GRID_MIN = 40
+CONTOUR_GRID_MAX = 600
+
+#: Standard plotting scales, used to suggest a workable scale when the survey
+#: does not fit the chosen sheet.
+STANDARD_SCALES = (100, 200, 250, 500, 1000, 1250, 2000, 2500, 5000, 10000, 20000, 50000)
 
 
 class BeaconType(str, Enum):
@@ -255,7 +398,11 @@ class PlanProps(BaseModel):
     name: str
     type: PlanType = PlanType.CADASTRAL
     font: str = "Times New Roman"
-    font_size: float = 12
+    #: Printed height of the plan title in millimetres, and the master control
+    #: for every other text element (see :attr:`text_scale`). Defaults to the
+    #: designed title size, so an unset plan gets exactly the scale-driven
+    #: defaults rather than a doubled sheet.
+    font_size: float = 5.0
     coordinates: Optional[List[CoordinateProps]] = None
     elevations: Optional[List[ElevationProps]] = None
     parcels: Optional[List[ParcelProps]] = None
@@ -267,11 +414,11 @@ class PlanProps(BaseModel):
     origin: PlanOrigin = PlanOrigin.UTM_ZONE_31
     scale: float = 1000
     beacon_type: BeaconType = BeaconType.BOX
-    #: Beacon symbol width in metres. Fallback only: the API derives this
-    #: from the drawing extent so the symbol prints at ~1.6 mm (a neat point
-    #: marker) regardless of parcel size or plan scale. An explicit value in
-    #: the payload always wins.
+    #: Beacon symbol width in metres. Legacy field: used only when
+    #: ``auto_scale_sizes`` is off. With auto sizing (the default) the symbol
+    #: is resolved from :data:`BEACON_SYMBOL_MM` and the plotting scale.
     beacon_size: float = 0.18
+    #: General label height in metres. Legacy field, see ``beacon_size``.
     label_size: float = 1.0
     personel_name: str = ""
     surveyor_name: str = ""
@@ -290,12 +437,121 @@ class PlanProps(BaseModel):
     footers: List[str] = []
     footer_size: float = 0.5
     dxf_version: str = "R2000"
+    #: How many points each series held before thinning, set by the streaming
+    #: reader when a large survey is sent as NDJSON. Used only to tell the
+    #: reader of the sheet what fraction of the survey it is looking at.
+    point_totals: Dict[str, int] = Field(default_factory=dict)
+    #: Draw a bearing/distance schedule on the sheet, so the plan is
+    #: self-contained for submission (Task 10). Cadastral plans list the
+    #: parcel legs; topographic and layout plans list their boundary legs.
+    show_bearing_distance_table: bool = False
+    #: Draw a coordinate schedule on the sheet. Cadastral plans list the
+    #: beacon register; topographic and layout plans list their boundary
+    #: coordinates, and layout additionally lists the plot-corner register it
+    #: exports for setting out.
+    show_coordinate_table: bool = False
+    #: Resolve text and symbol sizes from the plotting scale (Task 8). When
+    #: this is on -- the default -- choosing a scale automatically produces
+    #: legible, plot-ready text and the legacy ``*_size`` fields are ignored
+    #: for map plans. Set it to ``False`` to drive every size manually from
+    #: ``font_size`` / ``label_size`` / ``footer_size`` / ``beacon_size``.
+    auto_scale_sizes: bool = True
+    #: When the survey does not fit the chosen sheet at the requested scale,
+    #: fall back to the next standard scale that does (never a larger one --
+    #: the plan is only ever zoomed out, never in) and print that scale in the
+    #: title block. With this off the plan raises instead, which is the right
+    #: behaviour when a submission mandates an exact scale.
+    fit_scale_to_sheet: bool = True
+    #: Per-element printed height overrides, in millimetres, keyed by the
+    #: element classes of :data:`TEXT_HEIGHTS_MM` (e.g.
+    #: ``{"bearing_distance": 3.0}``). Overrides win over the table while
+    #: leaving every other element on the scale-driven default.
+    text_heights: Dict[str, float] = Field(default_factory=dict)
 
-    def get_drawing_scale(self) -> float:
-        """Drawing-unit multiplier so that geometry is drawn at 1:1000 base."""
-        if not self.scale:
+    @property
+    def mm_to_model(self) -> float:
+        """Model units (metres) that print as one millimetre at this scale.
+
+        Geometry is drawn at true ground coordinates, so a plan plotted at
+        1:500 renders 1 m as 2 mm and one printed millimetre is 0.5 m of
+        model space.
+        """
+        scale = self.scale or 1000
+        return scale / 1000.0
+
+    @property
+    def plot_scale_mm_per_unit(self) -> float:
+        """Printed millimetres per model unit -- what the PDF renderer needs
+        to plot the sheet at the declared scale."""
+        scale = self.scale or 1000
+        return 1000.0 / scale
+
+    @property
+    def text_scale(self) -> float:
+        """Title-group multiplier, from ``font_size``.
+
+        Kept as a name for the title group's scale. It used to multiply every
+        text element on the sheet, which meant nudging the title quietly
+        resized the bearings and quoted coordinates whose heights the surveyor
+        had specified -- see :func:`group_scale`.
+        """
+        return self.group_scale("title")
+
+    def size_control(self, group: str) -> Optional[float]:
+        """The app control that governs a text group."""
+        return {
+            "title": self.font_size,
+            "annotation": self.label_size,
+            "footer": self.footer_size,
+        }.get(group)
+
+    def group_scale(self, group: str) -> float:
+        """Multiplier for one text group, from the control that owns it.
+
+        Each control is read as the printed height it asks for, divided by the
+        designed height of its group's reference element -- so Title Size
+        moves the title block, Label Size moves the map annotation, and
+        Footer Size moves the footer, none of them touching the others.
+        """
+        if not self.auto_scale_sizes:
             return 1.0
-        return 1000 / self.scale
+
+        requested = self.size_control(group)
+        if requested is None or float(requested) < LEGACY_SIZE_MM:
+            # Unset, or a legacy ground-metre value: use the designed sizes.
+            return 1.0
+
+        clamped = min(float(requested), FONT_SIZE_MAX_MM)
+        reference = GROUP_REFERENCE.get(group, "general")
+        return clamped / TEXT_HEIGHTS_MM[reference]
+
+    def text_height(self, element: str = "general") -> float:
+        """Model-unit height for a text element class.
+
+        Resolves the class's printed height in millimetres -- an entry in
+        ``text_heights`` if the caller supplied one, otherwise the
+        :data:`TEXT_HEIGHTS_MM` default -- and converts it to model units at
+        the plan's scale.
+        """
+        override = self.text_heights.get(element)
+        if override is not None and override > 0:
+            # An explicit per-element override is an absolute printed size and
+            # is not scaled again by font_size.
+            return override * self.mm_to_model
+
+        mm = TEXT_HEIGHTS_MM.get(element, TEXT_HEIGHTS_MM["general"])
+        group = TEXT_GROUPS.get(element, "annotation")
+        return mm * self.group_scale(group) * self.mm_to_model
+
+    def printable_area(self) -> tuple:
+        """Printable sheet size in millimetres (paper less the print margins),
+        honouring the page orientation."""
+        page_size = getattr(self.page_size, "value", self.page_size)
+        orientation = getattr(self.page_orientation, "value", self.page_orientation)
+        paper_w, paper_h = PAPER_SIZES.get(str(page_size).upper(), PAPER_SIZES["A4"])
+        if str(orientation).lower() == "landscape":
+            paper_w, paper_h = paper_h, paper_w
+        return paper_w - 2 * PAGE_MARGIN_MM, paper_h - 2 * PAGE_MARGIN_MM
 
     def get_bounding_box(self) -> tuple:
         """Bounding box (min_x, min_y, max_x, max_y) of all plan coordinates.
@@ -352,7 +608,11 @@ class PlanProps(BaseModel):
         ):
             if line:
                 p = soup.new_tag("p")
-                p.string = line
+                # Marked as subordinate so the drawing renders them below the
+                # title's own size; they are context, not the heading.
+                small = soup.new_tag("small")
+                small.string = line
+                p.append(small)
                 soup.append(p)
 
         return str(soup)

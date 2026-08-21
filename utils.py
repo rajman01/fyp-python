@@ -5,6 +5,10 @@ import re
 from bs4 import BeautifulSoup
 from ezdxf.tools.text import MTextEditor
 
+#: Height of a <small> run relative to the surrounding text. Used for the
+#: address / local government / state / scale lines under a plan title.
+SUBTITLE_HEIGHT_FACTOR = 0.68
+
 
 def polygon_orientation(coords) -> str:
     """Return 'CW' or 'CCW' for a polygon given as [(x1, y1), (x2, y2), ...]."""
@@ -103,6 +107,12 @@ def html_to_mtext(html_text: str, font: str = "Times New Roman") -> str:
                 with_style("bold", child)
             elif child.name in ("i", "em"):
                 with_style("italic", child)
+            elif child.name == "small":
+                # MText height codes are relative to the current height, so the
+                # closing code is the reciprocal rather than a fixed value.
+                editor.append(rf"\H{SUBTITLE_HEIGHT_FACTOR}x;")
+                parse_tag(child)
+                editor.append(rf"\H{1 / SUBTITLE_HEIGHT_FACTOR:.4f}x;")
             elif child.name == "u":
                 editor.append(MTextEditor.UNDERLINE_START)
                 parse_tag(child)

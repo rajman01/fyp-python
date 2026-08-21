@@ -38,13 +38,14 @@ from shapely.ops import unary_union
 
 from dxf_manager import SurveyDXFManager
 from models.plan import (
+    TEXT_HEIGHTS_MM,
     CoordinateProps,
     LayoutMode,
     LayoutPlotProps,
     LayoutRoadProps,
     PlanType,
 )
-from plans.base import BasePlan
+from plans.base import FOOTER_HEIGHT_PERCENT, BasePlan, TableSpec
 from utils import polygon_orientation, readable_angle
 
 logger = logging.getLogger(__name__)
@@ -53,6 +54,11 @@ Point2 = Tuple[float, float]
 
 # Uses that are drawn hatched as green/open areas
 OPEN_USES = {"open_space", "green", "park"}
+
+# Land-use schedule: row pitch as a multiple of the cell text height, and the
+# row count the sheet reserves room for before the plots are generated.
+SCHEDULE_ROW_SPACING = 2.2
+SCHEDULE_NOMINAL_ROWS = 8
 
 
 def _block_label(index: int) -> str:
@@ -68,6 +74,7 @@ def _block_label(index: int) -> str:
 
 class LayoutPlan(BasePlan):
     expected_type: ClassVar[PlanType] = PlanType.LAYOUT
+    draws_north_arrow: ClassVar[bool] = True
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -89,9 +96,42 @@ class LayoutPlan(BasePlan):
         for coord in self.coordinates or []:
             self._register.setdefault(coord.id, (coord.easting, coord.northing))
 
+    def _bottom_band_mm(self) -> float:
+        """Reserve sheet for the land-use schedule.
+
+        The schedule is a fixed sheet element like the title block, so the
+        room it needs is taken out of the drawing area up front -- which also
+        lets the auto-fit scale account for it. Plots are only generated
+        during ``draw()``, so the band is sized for a nominal row count rather
+        than the exact schedule.
+        """
+        row_height_mm = TEXT_HEIGHTS_MM["table"] * SCHEDULE_ROW_SPACING
+        return row_height_mm * SCHEDULE_NOMINAL_ROWS + row_height_mm
+
+    def _bearing_distance_table(self):
+        """Legs of the site boundary."""
+        boundary = self.layout_boundary
+        legs = boundary.legs if boundary else []
+        return TableSpec("BOUNDARY BEARING & DISTANCE",
+                         ["LINE", "BEARING", "DIST. (M)"], self._leg_rows(legs))
+
+    def _coordinate_table(self):
+        """Site boundary corners followed by the plot-corner register.
+
+        An automated layout generates its corners during ``draw()``, after the
+        sheet has been sized, so only the register present in the payload is
+        listed here -- the full generated set always goes out in
+        ``setting_out_coordinates.csv``.
+        """
+        boundary = self.layout_boundary
+        coords = list(boundary.coordinates if boundary else [])
+        coords.extend(self.coordinates or [])
+        return TableSpec("COORDINATES", ["STN", "NORTHING", "EASTING"],
+                         self._coordinate_rows(coords))
+
     def _setup_layers(self, drawer: SurveyDXFManager):
         drawer.setup_layout_layers()
-        drawer.setup_beacon_style(self.beacon_type, self.beacon_size)
+        drawer.setup_beacon_style(self.beacon_type, self.beacon_symbol_size)
 
     def _area_text(self) -> str:
         if self.layout_boundary.area is not None:
@@ -419,7 +459,7 @@ class LayoutPlan(BasePlan):
                 continue
             seen.add(coord.id)
             self._drawer.draw_beacon(coord.easting, coord.northing, 0,
-                                     self.label_size, self._get_drawing_extent(), coord.id)
+                                     self.height("beacon_label", self.label_size), coord.id)
 
     def draw_roads(self):
         for road in self.roads or []:
@@ -443,7 +483,7 @@ class LayoutPlan(BasePlan):
                 mid = centerline.interpolate(0.5, normalized=True)
                 (x1, y1), (x2, y2) = points[0], points[-1]
                 text_angle = readable_angle(math.degrees(math.atan2(y2 - y1, x2 - x1)))
-                height = min(self.label_size, road.width * 0.4)
+                height = min(self.height("general", self.label_size), road.width * 0.4)
                 self._drawer.add_label(road.name, mid.x, mid.y,
                                        angle=text_angle, height=height)
 
@@ -455,8 +495,9 @@ class LayoutPlan(BasePlan):
 
             # Labels must fit inside their own plot regardless of site size
             size = math.sqrt(max(polygon.area, 1.0))
-            number_height = min(self.label_size, size * 0.15)
-            use_height = min(self.label_size, size * 0.09)
+            label_height = self.height("general", self.label_size)
+            number_height = min(label_height, size * 0.15)
+            use_height = min(label_height, size * 0.09)
 
             if plot.use in OPEN_USES:
                 self._drawer.add_greenspace(points)
@@ -483,7 +524,8 @@ class LayoutPlan(BasePlan):
 
         for block, polygons in blocks.items():
             union = unary_union(polygons)
-            height = min(self.label_size * 1.6, math.sqrt(max(union.area, 1.0)) * 0.07)
+            height = min(self.height("general", self.label_size) * 1.6,
+                         math.sqrt(max(union.area, 1.0)) * 0.07)
             self._drawer.add_text(f"BLOCK {block}", union.centroid.x, union.centroid.y,
                                   height, alignment=TextEntityAlignment.MIDDLE_CENTER)
 
@@ -525,8 +567,8 @@ class LayoutPlan(BasePlan):
         frame_left, frame_bottom, frame_right, frame_top = self._frame_coords
         min_x, min_y, max_x, max_y = self._bounding_box
 
-        text_height = self.label_size
-        row_height = text_height * 2.2
+        text_height = self.height("table", self.label_size)
+        row_height = text_height * SCHEDULE_ROW_SPACING
         # Generous per-character estimate so text never spills over its cell
         char_w = text_height * 0.95
         col_widths = [
@@ -536,11 +578,15 @@ class LayoutPlan(BasePlan):
             max(len(str(r[3])) for r in rows) * char_w + 2 * char_w,
         ]
 
-        # Place the table below the drawing, left-aligned with the site —
-        # the frame's bottom margin is always deep enough, so the table can
-        # never overlap the plots regardless of the computed text sizes.
+        # The table sits in the band reserved above the footer boxes
+        # (see _bottom_band_mm), left-aligned with the site. Anchoring it to
+        # the footer band rather than to the bottom of the drawing keeps it
+        # clear of the plots however much room the chosen scale leaves.
+        footer_top = frame_bottom + (frame_top - frame_bottom) * FOOTER_HEIGHT_PERCENT
+        table_height = row_height * len(rows)
+
         x = min_x
-        y = min_y - row_height
+        y = min(footer_top + table_height + row_height * 0.5, min_y - row_height * 0.5)
         self._drawer.draw_table(x, y, rows, col_widths, row_height, text_height)
 
     # ------------------------------------------------------------------
@@ -605,6 +651,7 @@ class LayoutPlan(BasePlan):
         self.draw_frames()
         self.draw_title_block()
         self.draw_footer_boxes()
+        self.draw_tables()
         self.draw_north_arrow()
         self.draw_beacons()
 
@@ -613,4 +660,5 @@ class LayoutPlan(BasePlan):
             paper_size=self.page_size,
             orientation=self.page_orientation,
             extra_files={"setting_out_coordinates.csv": self.build_setting_out_csv()},
+            scale=self.plot_scale_mm_per_unit if self.true_scale else None,
         )

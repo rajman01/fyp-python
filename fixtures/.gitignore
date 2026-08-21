@@ -1,0 +1,12 @@
+# Sample CAD drawings for the legacy-import work (Task 11).
+#
+# Generated fixtures are not committed -- they are rebuilt from the test
+# builders, and DWG is a large binary format:
+#
+#   docker compose run --rm engine python tests/cad_import_test.py
+#
+# Real legacy drawings from testers are the fixtures that matter, and they may
+# carry client data, so they are kept out of the repository too. Drop them in
+# here locally; the compose file mounts this directory at /fixtures.
+*.dwg
+*.dxf
