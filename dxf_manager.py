@@ -34,6 +34,7 @@ from ezdxf.fonts import fonts as ezfonts
 from ezdxf.tools.text import MTextEditor
 from ezdxf.tools.text_size import mtext_size
 
+import upload as upload_module
 from upload import upload_file
 
 logger = logging.getLogger(__name__)
@@ -952,5 +953,11 @@ class SurveyDXFManager:
 
             url = upload_file(zip_path, folder="survey_plans", file_name=filename)
             if url is None:
-                raise RuntimeError("Failed to upload generated plan archive")
+                # Carry the reason up. The sheet drew perfectly well; what
+                # failed was putting it somewhere, and "failed to upload" on
+                # its own sends whoever reads it looking in the wrong place.
+                raise RuntimeError(
+                    f"Failed to upload generated plan archive: "
+                    f"{upload_module.last_error or 'unknown reason'}"
+                )
             return url

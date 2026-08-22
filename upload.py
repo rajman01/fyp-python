@@ -48,6 +48,10 @@ def bucket_name() -> Optional[str]:
     return _setting("S3_BUCKET", "AWS_BUCKET")
 
 
+class StorageUnavailable(RuntimeError):
+    """Storage cannot be used, with a reason worth putting in front of someone."""
+
+
 def is_configured() -> bool:
     """Whether there is enough configuration to upload anything."""
     return bool(
@@ -72,8 +76,19 @@ def _get_client():
         if _client is not None:
             return _client
 
-        import boto3
-        from botocore.config import Config
+        try:
+            import boto3
+            from botocore.config import Config
+        except ImportError as exc:
+            # Almost always a container running new code on an old image: the
+            # source is mounted but the packages come from the image, so
+            # switching storage libraries needs a rebuild. Said plainly here
+            # rather than left as a ModuleNotFoundError inside a traceback
+            # inside a 500.
+            raise StorageUnavailable(
+                "boto3 is not installed. The drawing engine's image predates "
+                "the move to S3 -- rebuild it (docker compose build engine)."
+            ) from exc
 
         _client = boto3.client(
             "s3",
@@ -109,6 +124,11 @@ def public_url(key: str) -> str:
     return f"{endpoint.rstrip('/')}/{bucket}/{key}"
 
 
+#: Why the last upload failed, for a caller that wants to say more than
+#: "it did not work". Set alongside the log line, not instead of it.
+last_error: Optional[str] = None
+
+
 def upload_file(file_path: str, folder: str = "uploads", file_name: str = None):
     """Upload a file and return its public URL, or ``None`` if it failed.
 
@@ -116,11 +136,15 @@ def upload_file(file_path: str, folder: str = "uploads", file_name: str = None):
     that decides whether a plan succeeded: the sheet is already on disk by the
     time this runs, and a storage outage should not read as a failed plan.
     """
+    global last_error
+    last_error = None
+
     if not is_configured():
-        logger.error(
+        last_error = (
             "Object storage is not configured: set S3_BUCKET, S3_ENDPOINT and "
             "the LINODE_ACCESS_KEY_ID / LINODE_SECRET_ACCESS_KEY pair"
         )
+        logger.error("%s", last_error)
         return None
 
     name = file_name or os.path.basename(file_path)
@@ -138,7 +162,14 @@ def upload_file(file_path: str, folder: str = "uploads", file_name: str = None):
             ExtraArgs={"ContentType": content_type, "ACL": DEFAULT_ACL},
         )
         return public_url(key)
-    except Exception:
+    except StorageUnavailable as exc:
+        # A misconfiguration, not a transient failure. Worth saying once and
+        # clearly rather than burying under a stack trace.
+        last_error = str(exc)
+        logger.error("%s", exc)
+        return None
+    except Exception as exc:
+        last_error = f"{type(exc).__name__}: {exc}"
         logger.exception("Upload to object storage failed (%s)", key)
         return None
 
