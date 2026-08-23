@@ -29,7 +29,7 @@ import ezdxf
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from models.plan import SPOT_HEIGHT_SPACING_MM
+from models.plan import SPOT_HEIGHT_SPACING_MM, TOPO_POINT_SPACING_MM
 from plans import TopographicPlan
 from point_stream import (
     GridDecimator,
@@ -196,12 +196,16 @@ def check_one_million(out_dir):
     spot_points = len(msp.query("INSERT[name=='TOPO_POINT']"))
     spot_labels = len(msp.query("TEXT[layer=='SPOT_HEIGHTS']"))
 
-    if spot_points > 4000:
-        errors.append(f"{spot_points:,} spot heights drawn -- more than a sheet can carry")
+    if spot_points > 8000:
+        errors.append(f"{spot_points:,} markers drawn -- more than a sheet can carry")
     if spot_points == 0:
         errors.append("no spot heights drawn at all")
-    if spot_labels != spot_points:
-        errors.append(f"{spot_points} symbols but {spot_labels} labels")
+    # Markers and labels are no longer one-to-one: every shot the sheet can
+    # hold gets a cross, and only those far enough apart get the number too.
+    if spot_labels > spot_points:
+        errors.append(f"{spot_labels} labels for only {spot_points} markers")
+    if spot_labels == 0:
+        errors.append("markers drawn but no elevations labelled")
 
     size_mb = os.path.getsize(path) / (1024 * 1024)
     if size_mb > 50:
@@ -271,28 +275,46 @@ def check_contours_unchanged(out_dir):
 
 
 def check_display_thinning(out_dir):
-    """Spot-height spacing is a printed size, so it holds at any scale."""
+    """Both spacings are printed sizes, so they hold at any scale.
+
+    Markers and elevations are thinned separately -- the cross is small and can
+    sit close together, the number cannot -- so each has its own minimum and
+    the marker set is legitimately the denser of the two.
+    """
     errors = []
+
+    def closest_pair_violates(points, spacing):
+        """True if any two of these sit closer than the spacing allows."""
+        for i, a in enumerate(points):
+            for b in points[i + 1:]:
+                if (abs(a.easting - b.easting) < spacing * 0.5
+                        and abs(a.northing - b.northing) < spacing * 0.5):
+                    return True
+        return False
+
     for scale in (500, 1000, 2500):
         stream = NdjsonStream(plan_header(scale=scale), 40_000)
         plan, _ = read_plan_stream(stream)
         topo = TopographicPlan(**plan)
         visible = topo.visible_spot_heights()
+        labelled = topo.labelled_spot_heights(visible)
 
-        spacing = SPOT_HEIGHT_SPACING_MM * topo.mm_to_model
-        for i, a in enumerate(visible):
-            for b in visible[i + 1:]:
-                too_close = (abs(a.easting - b.easting) < spacing * 0.5
-                             and abs(a.northing - b.northing) < spacing * 0.5)
-                if too_close:
-                    errors.append(f"1:{scale}: two spot heights closer than the spacing")
-                    break
-            else:
-                continue
-            break
+        for name, points, mm in (("markers", visible, TOPO_POINT_SPACING_MM),
+                                 ("labels", labelled, SPOT_HEIGHT_SPACING_MM)):
+            if closest_pair_violates(points, mm * topo.mm_to_model):
+                errors.append(f"1:{scale}: two {name} closer than their {mm} mm spacing")
 
-        if len(visible) > 4000:
-            errors.append(f"1:{scale}: {len(visible)} spot heights is more than a sheet carries")
+        # The whole point of separating them: a survey dense enough to thin
+        # shows far more of itself as markers than it can label.
+        if len(visible) <= len(labelled):
+            errors.append(
+                f"1:{scale}: {len(visible)} markers for {len(labelled)} labels -- "
+                "the marker spacing is being driven by the text again")
+
+        if len(visible) > 8000:
+            errors.append(
+                f"1:{scale}: {len(visible)} markers is more than a sheet carries")
+
     return errors
 
 

@@ -87,10 +87,25 @@ class TopographicPlan(BasePlan):
         else:
             notes = []
 
-        drawn = len(self.visible_spot_heights()) if settings.show_spot_heights else 0
-        total = self.total_survey_points()
-        if settings.show_spot_heights and total > drawn:
-            notes.append(f"SPOT HEIGHTS SHOWN :- {drawn:,} OF {total:,}")
+        # Three numbers, and the sheet used to print the first and last:
+        # "260 OF 1,497,127" reads as though the survey was thrown away and
+        # the contours drawn from 260 points. They are not. Every point that
+        # lands in a distinct millimetre of the sheet is kept and feeds the
+        # surface; what the label spacing limits is only how many elevations
+        # can be written down.
+        surveyed = self.total_survey_points()
+        plotted = len(self.coordinates or [])
+
+        if settings.show_spot_heights:
+            drawn = len(self.visible_spot_heights())
+            if plotted > drawn:
+                notes.append(f"SPOT HEIGHTS SHOWN :- {drawn:,} OF {plotted:,} PLOTTED")
+            if surveyed > plotted:
+                notes.append(
+                    f"CONTOURS FROM {plotted:,} OF {surveyed:,} SURVEYED POINTS")
+        elif surveyed > plotted:
+            notes.append(f"CONTOURS FROM {plotted:,} OF {surveyed:,} SURVEYED POINTS")
+
         return notes
 
     # ------------------------------------------------------------------
