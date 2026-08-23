@@ -26,10 +26,10 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# Uploaded artefacts are downloaded by whoever the plan is shared with, so they
-# are readable without a signature. Objects are keyed by plan and timestamp,
-# which is not a secret worth protecting but is not guessable either.
-DEFAULT_ACL = "public-read"
+# Objects are private. A survey plan is a client's data, so it is reachable
+# only through a signature the API mints for the plan's owner when they ask to
+# download it -- not by anyone who comes across the URL.
+DEFAULT_ACL = "private"
 
 _client = None
 _client_lock = threading.Lock()
@@ -109,12 +109,11 @@ def _get_client():
         return _client
 
 
-def public_url(key: str) -> str:
-    """Permanent URL for an object, derived from the endpoint.
+def object_url(key: str) -> str:
+    """Where an object lives. Not a link that will open: objects are private.
 
-    Path style rather than virtual-hosted -- ``endpoint/bucket/key`` -- because
-    it works whether or not the bucket name resolves as a subdomain, which for
-    a custom endpoint is not something to assume.
+    Kept because a key on its own is hard to act on when something has gone
+    wrong, and this says which bucket and endpoint it is in.
     """
     bucket = bucket_name()
     endpoint = _setting("S3_ENDPOINT")
@@ -130,7 +129,11 @@ last_error: Optional[str] = None
 
 
 def upload_file(file_path: str, folder: str = "uploads", file_name: str = None):
-    """Upload a file and return its public URL, or ``None`` if it failed.
+    """Upload a file and return its object key, or ``None`` if it failed.
+
+    A key, not a URL. The object is private, so what a caller can do with it
+    is ask the API to sign a link for whoever is entitled to it -- and that is
+    a decision about who is asking, which belongs there and not here.
 
     Returning ``None`` rather than raising keeps the drawing itself the thing
     that decides whether a plan succeeded: the sheet is already on disk by the
@@ -161,7 +164,7 @@ def upload_file(file_path: str, folder: str = "uploads", file_name: str = None):
             key,
             ExtraArgs={"ContentType": content_type, "ACL": DEFAULT_ACL},
         )
-        return public_url(key)
+        return key
     except StorageUnavailable as exc:
         # A misconfiguration, not a transient failure. Worth saying once and
         # clearly rather than burying under a stack trace.

@@ -951,8 +951,8 @@ class SurveyDXFManager:
                 for name, content in (extra_files or {}).items():
                     zipf.writestr(name, content)
 
-            url = upload_file(zip_path, folder="survey_plans", file_name=filename)
-            if url is None:
+            key = upload_file(zip_path, folder="survey_plans", file_name=filename)
+            if key is None:
                 # Carry the reason up. The sheet drew perfectly well; what
                 # failed was putting it somewhere, and "failed to upload" on
                 # its own sends whoever reads it looking in the wrong place.
@@ -960,4 +960,6 @@ class SurveyDXFManager:
                     f"Failed to upload generated plan archive: "
                     f"{upload_module.last_error or 'unknown reason'}"
                 )
-            return url
+            # The object key, not a link. The archive is private; the API signs
+            # a URL for the plan's owner when they ask to download it.
+            return key

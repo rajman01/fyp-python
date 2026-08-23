@@ -37,8 +37,8 @@ os.environ.update({
 check("configured is detected", upload.is_configured())
 check("bucket read from S3_BUCKET", upload.bucket_name() == "autoplan")
 
-print("\n== the URL handed back ==")
-url = upload.public_url("survey_plans/plan-1.zip")
+print("\n== where an object lives ==")
+url = upload.object_url("survey_plans/plan-1.zip")
 check("built from the endpoint and bucket",
       url == "https://eu-central-1.linodeobjects.com/autoplan/survey_plans/plan-1.zip", url)
 
@@ -60,11 +60,15 @@ got = upload.upload_file("/etc/hosts", folder="survey_plans", file_name="plan-1.
 c = calls[-1]
 check("bucket", c["bucket"] == "autoplan", c["bucket"])
 check("key is folder/name", c["key"] == "survey_plans/plan-1.zip", c["key"])
-check("public-read so the link works for whoever it is shared with",
-      c["extra"]["ACL"] == "public-read", str(c["extra"]))
+# Private: a survey plan is a client's data, and it is reached through a
+# signature the API mints for the plan's owner, not by knowing the address.
+check("uploaded private, not public-read",
+      c["extra"]["ACL"] == "private", str(c["extra"]))
 check("content type is set", "ContentType" in c["extra"], str(c["extra"]))
-check("returns the public URL",
-      got == "https://eu-central-1.linodeobjects.com/autoplan/survey_plans/plan-1.zip", str(got))
+# A key, not a link. Who may read it is a question about who is asking,
+# which the API answers by signing a URL for them.
+check("returns the object key, not a link",
+      got == "survey_plans/plan-1.zip", str(got))
 
 upload.upload_file("/etc/hosts", folder="", file_name="loose.txt")
 check("no folder means a bare key", calls[-1]["key"] == "loose.txt", calls[-1]["key"])
@@ -78,8 +82,8 @@ check("returns None instead of raising", upload.upload_file("/etc/hosts") is Non
 print("\n== AWS proper, with no custom endpoint ==")
 del os.environ["S3_ENDPOINT"]
 check("falls back to the AWS URL shape",
-      upload.public_url("k/f.zip") == "https://autoplan.s3.eu-central-1.amazonaws.com/k/f.zip",
-      upload.public_url("k/f.zip"))
+      upload.object_url("k/f.zip") == "https://autoplan.s3.eu-central-1.amazonaws.com/k/f.zip",
+      upload.object_url("k/f.zip"))
 
 print(f"\n{fails} failure(s)" if fails else "\nall storage checks pass")
 sys.exit(1 if fails else 0)

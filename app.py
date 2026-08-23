@@ -124,11 +124,13 @@ def generate_plan(plan_cls, plan_label: str):
     plan.draw()
 
     progress.stage("exporting DXF, DWG and PDF", fraction=0.75)
-    url = plan.save()
+    key = plan.save()
     return jsonify({
         "message": f"{plan_label} plan generated",
         "filename": plan.name,
-        "url": url,
+        # The object key. The archive is private, so there is no link to hand
+        # back -- the API signs one for the plan's owner on request.
+        "key": key,
     }), 200
 
 
