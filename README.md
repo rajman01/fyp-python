@@ -147,6 +147,28 @@ Set `REDIS_URI` for the engine to report progress into the API's job record
 while it reads, draws and exports. Without it the engine still generates
 normally and simply reports nothing.
 
+### Possible improvement: thin before sending, not after
+
+Everything the API holds is currently sent so that the engine can decide what
+to discard. A 1.5-million-point survey travels as a 113 MB export and is thinned
+on arrival to roughly 4,400 points -- 0.3% of what was moved -- and the drawn
+sheet would be identical had the other 99.7% never been sent.
+
+The rule (`decimation_cell_size` and `GridDecimator` in `point_stream.py`) needs
+only the plotting scale, which the API already knows, so it could be applied
+before the export -- ideally inside MongoDB, so the points never leave it.
+
+Two things would have to hold. The sheet is sometimes auto-fitted to a coarser
+scale than the one requested, which makes the cell larger, so thinning must use
+the *requested* scale: that keeps a superset of what this engine would keep,
+and the engine thins again on arrival regardless. And the first point in each
+cell wins, which is only meaningful in traverse order -- whatever thins first
+has to preserve it.
+
+The cost is the rule living in two languages. It is worth a test that runs one
+fixture through both and asserts the same points survive, or they will drift
+apart and the sheets will quietly stop matching.
+
 The supported dataset size is enforced by the API (`MAX_SURVEY_POINTS`,
 default 2,000,000 points, and `MAX_UPLOAD_BYTES`, default 256 MB). The default
 is provisional: it comes from a synthetic uniform grid, not from real GNSS or
