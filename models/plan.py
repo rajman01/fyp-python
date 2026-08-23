@@ -159,7 +159,10 @@ SUBTITLE_HEIGHT_FACTOR = 0.68
 BEACON_SYMBOL_MM = 1.6
 
 #: Printed size (arm length) of the topographic spot-height cross.
-TOPO_POINT_SYMBOL_MM = 1.0
+# Arm length of the spot-height cross, so the symbol spans twice this. Small:
+# a spot height is a position, and at survey density a heavier mark turns the
+# sheet into hatching.
+TOPO_POINT_SYMBOL_MM = 0.5
 
 #: Schedule tables drawn on the sheet (Task 10): row pitch as a multiple of
 #: the cell text height, a generous per-character width estimate so text never
@@ -177,14 +180,23 @@ TABLE_GAP_MM = 5.0
 TABLE_COORDINATE_DECIMALS = 3
 TABLE_DISTANCE_DECIMALS = 2
 
-#: Minimum printed spacing between drawn spot heights, in millimetres. An A4
-#: sheet is about 43,700 square millimetres and an elevation label needs
-#: roughly 24 of them to stay readable, so a sheet carries on the order of
-#: 1,800 labels however many points the survey holds. Drawing every point of a
-#: large survey produces an unopenable file rendering an unreadable sheet, so
-#: the drawn set is thinned to this spacing and the sheet says how many of the
-#: total it shows.
-SPOT_HEIGHT_SPACING_MM = 9.0
+#: Minimum printed spacing between spot-height *labels*, in millimetres.
+#:
+#: An elevation reads as about five characters at 1.5 mm, so it occupies
+#: roughly 5 mm of width; below that spacing the values run into each other.
+#: The previous 9 mm was nearly twice what its own reasoning called for and
+#: showed a fraction of the survey it could have.
+SPOT_HEIGHT_SPACING_MM = 5.0
+
+#: Minimum printed spacing between spot-height *markers*, in millimetres.
+#:
+#: Markers and labels used to be thinned together, so the width of a number
+#: decided how many survey shots appeared on the sheet -- a 25,000-point
+#: survey drew 60 crosses and looked as though the data had been thrown away.
+#: The cross is 1 mm across, so it can sit far closer than the text beside it:
+#: every point that will not collide is drawn, and only the elevations are
+#: thinned to stay readable.
+TOPO_POINT_SPACING_MM = 2.5
 
 #: Interpolation grid cell, in printed millimetres. The grid only has to
 #: resolve what the paper can show; a fixed cell count wastes work on a small

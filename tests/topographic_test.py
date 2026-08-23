@@ -101,6 +101,69 @@ def _title_block_text(doc):
     return "\n".join(e.text for e in doc.modelspace().query("MTEXT"))
 
 
+def check_dense_spot_heights(out_dir):
+    """A dense survey draws far more markers than it can label.
+
+    Markers and elevations used to be thinned together, so the width of a
+    number decided how much of the survey appeared at all: a 25,000-point
+    survey drew 60 crosses and looked as though the data had been discarded.
+    The cross is a fraction of the label's width and can sit much closer, so
+    the two are thinned separately now.
+    """
+    errors = []
+
+    # A 90 x 90 grid over 900 m: dense enough that the sheet cannot label
+    # every point, which is the case the old behaviour handled badly.
+    side, step = 90, 10.0
+    coords = []
+    for i in range(side):
+        for j in range(side):
+            coords.append({
+                "id": f"S{i}_{j}",
+                "easting": 543210.0 + i * step,
+                "northing": 712345.0 + j * step,
+                "elevation": round(20 + 8 * math.sin(i / 9) + 5 * math.cos(j / 7), 2),
+            })
+
+    plan = TopographicPlan(**(topo_payload(
+        tin=False, grid=True, contour_interval=1.0, major_contour=5.0,
+        show_spot_heights=True,
+    ) | {"coordinates": coords}))
+    plan.draw()
+    path = os.path.join(out_dir, "topo_dense.dxf")
+    plan.save_dxf(path)
+
+    markers = plan.visible_spot_heights()
+    labelled = plan.labelled_spot_heights(markers)
+
+    if len(markers) <= len(labelled):
+        errors.append(f"markers ({len(markers)}) should outnumber labels "
+                      f"({len(labelled)}) on a survey this dense")
+
+    # The point of the change: a good fraction of the survey shows as markers,
+    # rather than the handful the label spacing allows.
+    if len(markers) < 3 * len(labelled):
+        errors.append(f"only {len(markers)} markers for {len(labelled)} labels -- "
+                      "the marker spacing is still being driven by the text")
+
+    # Every label must sit on a marker that is actually drawn.
+    marker_ids = {id(c) for c in markers}
+    stray = [c for c in labelled if id(c) not in marker_ids]
+    if stray:
+        errors.append(f"{len(stray)} label(s) placed where no marker is drawn")
+
+    doc = ezdxf.readfile(path)
+    inserts, labels = _spot_counts(doc)
+    if inserts != len(markers):
+        errors.append(f"drew {inserts} markers, expected {len(markers)}")
+    if labels != len(labelled):
+        errors.append(f"drew {labels} labels, expected {len(labelled)}")
+
+    print(f"  dense survey: {len(coords):,} points -> {inserts:,} markers, "
+          f"{labels:,} labelled")
+    return errors
+
+
 def check_spot_heights(out_dir):
     errors = []
     expected = GRID_N * GRID_N  # 36
@@ -170,6 +233,7 @@ def main():
 
     for name, fn in (
         ("spot heights", lambda: check_spot_heights(out_dir)),
+        ("dense spot heights", lambda: check_dense_spot_heights(out_dir)),
         ("contour interval label", lambda: check_contour_interval_label(out_dir)),
         ("interval validation", check_interval_validation),
     ):

@@ -24,6 +24,7 @@ from models.plan import (
     CONTOUR_GRID_MAX,
     CONTOUR_GRID_MIN,
     SPOT_HEIGHT_SPACING_MM,
+    TOPO_POINT_SPACING_MM,
     TOPO_POINT_SYMBOL_MM,
     CoordinateProps,
     PlanType,
@@ -124,34 +125,50 @@ class TopographicPlan(BasePlan):
             )
 
     def visible_spot_heights(self) -> list:
-        """Spot heights thinned to what the sheet can legibly carry.
+        """Survey shots the sheet can carry as markers.
 
-        Elevation labels have a fixed printed size, so the sheet holds a fixed
-        number of them regardless of scale -- roughly 1,800 on A4. A survey of
-        a million points would otherwise emit two million DXF entities to
-        render an unreadable smear, so the drawn set is thinned to a minimum
-        printed spacing. The full survey is unaffected: it is still what the
-        contours are interpolated from, and what the export carries.
+        The marker is a 1 mm cross, so this is a much denser set than the one
+        that can carry elevations beside it: what limits it is the symbol, not
+        the text. The full survey is unaffected either way -- it is still what
+        the contours are interpolated from, and what the export carries.
         """
         points = self.coordinates or []
-        spacing = SPOT_HEIGHT_SPACING_MM * self.mm_to_model
+        spacing = TOPO_POINT_SPACING_MM * self.mm_to_model
         return thin_for_display(
             points, spacing, lambda c: (c.easting, c.northing),
         )
 
+    def labelled_spot_heights(self, visible: list) -> list:
+        """Which of the drawn markers also get their elevation written.
+
+        Thinned from the markers rather than from the survey, so every label
+        sits on a marker that is actually there.
+        """
+        spacing = SPOT_HEIGHT_SPACING_MM * self.mm_to_model
+        return thin_for_display(
+            visible, spacing, lambda c: (c.easting, c.northing),
+        )
+
     def draw_topo_points(self):
         visible = self.visible_spot_heights()
+        labelled = {id(c) for c in self.labelled_spot_heights(visible)}
         text_height = self.height("spot_height", self.topographic_setting.point_label_scale)
+
         for coord in visible:
+            # Every shot the sheet can hold gets its cross; only those far
+            # enough apart to stay readable get the number as well. Thinning
+            # them together let the width of a label decide how much of the
+            # survey appeared at all.
             self._drawer.draw_topo_point(
                 coord.easting, coord.northing, coord.elevation,
-                f"{coord.elevation}", text_height,
+                f"{coord.elevation}" if id(coord) in labelled else None,
+                text_height,
             )
 
         drawn, total = len(visible), self.total_survey_points()
         if total > drawn:
-            logger.info("drawing %s of %s spot heights at 1:%s",
-                        f"{drawn:,}", f"{total:,}", int(self.scale))
+            logger.info("drawing %s of %s survey points (%s labelled) at 1:%s",
+                        f"{drawn:,}", f"{total:,}", f"{len(labelled):,}", int(self.scale))
 
     def total_survey_points(self) -> int:
         """Points in the survey, including any thinned away before arrival."""
