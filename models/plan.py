@@ -74,7 +74,11 @@ def origin_display_name(origin) -> str:
 #: dense annotation (spot heights, contour labels) sits at the small end where
 #: testers already confirmed the printed size in the Task 6 review.
 TEXT_HEIGHTS_MM = {
-    "title": 5.0,           # plan title, address, state, scale line
+    # The title and the notes under the graphical scale are one size, by
+    # request: the block reads as a single statement rather than a heading with
+    # smaller print beneath it. They are equal here rather than equal by
+    # coincidence of the Title Size control, so they stay equal when it moves.
+    "title": 3.5,           # plan title, address, state, scale line
     "title_note": 3.5,      # area / origin / notes under the graphical scale
     "scale_bar": 1.8,       # graphical scale tick labels
     "bearing_distance": 2.5,  # leg distance and bearing labels
@@ -137,7 +141,8 @@ LEGACY_BEACON_MM = 0.5
 BEACON_SYMBOL_MAX_MM = 8.0
 
 #: ``font_size`` is read as the printed height of the plan title, in
-#: millimetres, and every other text element scales in proportion. Before this
+#: millimetres. It defaults to the same height as the area and origin notes,
+#: so the title block reads at one size rather than leading with a heading. Before this
 #: the scale-driven table ignored ``font_size`` entirely, so the embellishment
 #: control in the app did nothing -- 12 and 5.5 produced identical sheets.
 #:
@@ -147,11 +152,6 @@ BEACON_SYMBOL_MAX_MM = 8.0
 #: mis-sized.
 FONT_SIZE_MIN_MM = 2.0
 FONT_SIZE_MAX_MM = 14.0
-
-#: Height of the address / local government / state / scale lines relative to
-#: the title itself. A plan title is a heading; the lines under it are not, and
-#: setting them all at one size is what made the title block swallow the sheet.
-SUBTITLE_HEIGHT_FACTOR = 0.68
 
 #: Printed size of the beacon symbol in millimetres. Testers settled on this
 #: in the Task 3 review ("the beacon symbols are too large"): a neat point
@@ -414,7 +414,7 @@ class PlanProps(BaseModel):
     #: for every other text element (see :attr:`text_scale`). Defaults to the
     #: designed title size, so an unset plan gets exactly the scale-driven
     #: defaults rather than a doubled sheet.
-    font_size: float = 5.0
+    font_size: float = 3.5
     coordinates: Optional[List[CoordinateProps]] = None
     elevations: Optional[List[ElevationProps]] = None
     parcels: Optional[List[ParcelProps]] = None

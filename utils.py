@@ -7,7 +7,12 @@ from ezdxf.tools.text import MTextEditor
 
 #: Height of a <small> run relative to the surrounding text. Used for the
 #: address / local government / state / scale lines under a plan title.
-SUBTITLE_HEIGHT_FACTOR = 0.68
+#:
+#: One, by request: the title block reads at a single size, matching the
+#: area and origin notes under the graphical scale. Shrinking the subordinate
+#: lines relative to a title that is itself now note-sized would have left the
+#: address smaller than everything around it.
+SUBTITLE_HEIGHT_FACTOR = 1.0
 
 
 def polygon_orientation(coords) -> str:

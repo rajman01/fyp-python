@@ -208,6 +208,36 @@ def check_overrides(out_dir):
     return errors
 
 
+def check_title_block_is_one_size(out_dir):
+    """The title reads at the same size as the notes under the scale bar.
+
+    Asked for directly: the title was 5 mm against 3.5 mm notes and looked like
+    a heading over smaller print. The two are equal in the height table rather
+    than equal at one particular Title Size, so they stay equal wherever that
+    control is set -- and the subordinate lines under the title are no longer
+    shrunk relative to it, which would have left the address smaller than
+    everything around it.
+    """
+    from utils import SUBTITLE_HEIGHT_FACTOR
+
+    errors = []
+    for size in (None, 3.5, 5.0, 9.0):
+        over = {} if size is None else {"font_size": size}
+        plan = CadastralPlan(**payload(scale=500, **over))
+        title = plan.height("title", 0.0)
+        note = plan.height("title_note", 0.0)
+        label = "default" if size is None else f"Title Size {size}"
+
+        if abs(title - note) > 1e-6:
+            errors.append(f"{label}: title {title:.3f} but notes {note:.3f}")
+        if abs(title * SUBTITLE_HEIGHT_FACTOR - note) > 1e-6:
+            errors.append(
+                f"{label}: address and state lines are {SUBTITLE_HEIGHT_FACTOR:g}x the "
+                f"title, so they do not match the notes either")
+
+    return errors
+
+
 def check_size_control_groups(out_dir):
     """Each of the app's size controls moves its own group and nothing else.
 
@@ -445,6 +475,7 @@ def main():
         ("surveyor reference heights", check_surveyor_reference_heights),
         ("manual overrides", check_overrides),
         ("size control groups", check_size_control_groups),
+        ("title block is one size", check_title_block_is_one_size),
         ("frame clearance", check_frame_clearance),
         ("scale bar labels", check_scale_bar_labels),
         ("scale auto-fit", check_scale_autofit),
