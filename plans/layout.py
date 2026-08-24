@@ -45,6 +45,7 @@ from models.plan import (
     LayoutRoadProps,
     PlanType,
 )
+import label_placement
 from plans.base import FOOTER_HEIGHT_PERCENT, BasePlan, TableSpec, _LabelOption
 from utils import polygon_orientation, readable_angle
 
@@ -516,7 +517,7 @@ class LayoutPlan(BasePlan):
                                       alignment=TextEntityAlignment.MIDDLE_CENTER)
                 continue
 
-            self._drawer.add_parcel(points)
+            self._drawer.add_parcel(points, label_placement.DETAIL)
             if plot.use not in ("residential", "commercial"):
                 self._drawer.add_text(str(plot.use).upper(), cx, cy, use_height,
                                       alignment=TextEntityAlignment.MIDDLE_CENTER)

@@ -31,11 +31,13 @@ import tempfile
 
 from ezdxf import bbox
 from ezdxf.math import Matrix44
+from shapely.geometry import Point, Polygon
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from label_placement import overlaps as shapes_overlap
-from plans import CadastralPlan
+from plans import CadastralPlan, LayoutPlan
+from tests.layout_test import generate_payload
 from tests.tables_test import (
     BASE, CASES, TABLES_ON, _build, coords_of, legs_of,
 )
@@ -106,40 +108,48 @@ def _turn(centre, half_w, half_h, pivot, angle):
 
 
 def check_labels_do_not_collide(out_dir):
-    """No label sits on another label, on a beacon, or across a parcel line.
+    """No placed label sits on another placed label or on a beacon.
 
-    The drawing is annotated from a fixed formula -- distance inside the
-    polygon, bearing outside, both at the leg midpoint, id up and right of the
-    station -- and on any parcel whose legs are short relative to its text
-    those positions coincide. The placer is what turns the formula into a
-    preference, so this checks the outcome it exists for rather than the
-    positions it happened to choose.
+    Scoped to the annotation the placer positions -- leg bearings and
+    distances, station ids, road names -- because that is what it is allowed
+    to move. It is deliberately *not* asked to keep those clear of everything
+    else on the sheet: a layout plan draws buildings inside its boundary, and
+    a distance dodging one is pushed out of its parcel and into the bearing on
+    the far side of the leg, which is a worse sheet than a distance crossing a
+    building. Contour heights, spot heights and the quoted grid values are
+    left alone for the same reason, so a label may cross those.
+
+    Which makes this the check that the trade is actually being made in the
+    right direction: the things that were allowed to overlap must not have
+    cost us an overlap between the things that were not.
     """
     errors = []
 
-    def annotation(doc, measure):
-        """Every drawn label, as the sheet it occupies. Schedules excluded:
-        they have a reserved band and are checked by tables_test."""
+    def placed(doc, station_ids, road_names, measure):
+        """The labels the placer positions, as the sheet each occupies."""
         boxes = []
         for entity in doc.modelspace():
             if entity.dxftype() not in ("TEXT", "MTEXT"):
                 continue
-            if entity.dxf.layer in ("TABLES", "TEXT"):
+            if entity.dxf.layer != "LABELS":
+                continue
+            text = entity.dxf.text if entity.dxftype() == "TEXT" else entity.text
+            flat = " ".join(text.split())
+            if not (BEARING.match(flat) or DISTANCE.match(flat)
+                    or flat in station_ids or flat in road_names):
                 continue
             corners = _oriented_box(entity, measure)
             if corners is not None:
-                boxes.append((_describe(entity), corners))
+                boxes.append((flat, corners))
         return boxes
-
-    def _describe(entity):
-        text = entity.dxf.text if entity.dxftype() == "TEXT" else entity.text
-        return " ".join(text.split())
 
     for name, cls, payload, _ in PLACEMENT_CASES:
         for label, extra in (("bare", {}), ("with schedules", TABLES_ON)):
             plan, doc = _build(cls, payload(**extra), out_dir,
                                f"{name}_collide_{label.split()[0]}")
-            boxes = annotation(doc, plan._drawer.text_width)
+            boxes = placed(doc, set(plan._labelled_ids()),
+                           {r.name for r in (getattr(plan, "roads", None) or []) if r.name},
+                           plan._drawer.text_width)
 
             for i in range(len(boxes)):
                 for j in range(i + 1, len(boxes)):
@@ -147,6 +157,21 @@ def check_labels_do_not_collide(out_dir):
                     if shapes_overlap(a, b):
                         errors.append(
                             f"{name} ({label}): {first!r} and {second!r} overlap")
+
+            # A label over a beacon symbol hides the point it is naming.
+            for text, corners in boxes:
+                for beacon in doc.modelspace().query("INSERT[layer=='BEACONS']"):
+                    at = (beacon.dxf.insert.x, beacon.dxf.insert.y)
+                    size = plan.beacon_symbol_size * 0.5
+                    if shapes_overlap(corners, [
+                        (at[0] - size / 2, at[1] - size / 2),
+                        (at[0] + size / 2, at[1] - size / 2),
+                        (at[0] + size / 2, at[1] + size / 2),
+                        (at[0] - size / 2, at[1] + size / 2),
+                    ]):
+                        errors.append(
+                            f"{name} ({label}): {text!r} covers the beacon at "
+                            f"{at[0]:.1f}, {at[1]:.1f}")
 
     return errors
 
@@ -303,6 +328,44 @@ def _stations(plan):
     return plan.coordinates or []
 
 
+def check_distance_stays_in_its_parcel(out_dir):
+    """A distance label is not driven out of the parcel by what is inside it.
+
+    The distance goes inside the polygon and the bearing outside, which is how
+    the pair is read. A layout plan fills its boundary with plots, roads and
+    open space, and a placer told to keep annotation clear of everything on
+    the sheet has nowhere inside the boundary to put a distance at all: it
+    leaves the parcel, crosses the leg, and lands on the bearing -- the one
+    label it actually had to stay away from. A distance sitting over a plot
+    line costs nothing by comparison.
+    """
+    errors = []
+
+    # No schedule, so every distance has to be drawn somewhere and the test
+    # sees where it landed. With one on, a distance that cannot be placed is
+    # dropped instead -- correct behaviour, but it hides the placement.
+    plan = LayoutPlan(**generate_payload())
+    plan.draw()
+
+    boundary = Polygon([(c.easting, c.northing)
+                        for c in plan.layout_boundary.coordinates])
+    found = 0
+    for entity in plan._drawer.msp.query("TEXT[layer=='LABELS']"):
+        text = entity.dxf.text.strip()
+        if not DISTANCE.match(text):
+            continue
+        found += 1
+        at = Point(entity.dxf.insert.x, entity.dxf.insert.y)
+        if not boundary.contains(at):
+            errors.append(
+                f"{text!r} was pushed {boundary.exterior.distance(at):.1f} "
+                f"outside the boundary it measures")
+
+    if not found:
+        errors.append("no distance labels were drawn, so nothing was checked")
+    return errors
+
+
 def main():
     out_dir = sys.argv[1] if len(sys.argv) > 1 else tempfile.mkdtemp(prefix="fyp_annot_")
     os.makedirs(out_dir, exist_ok=True)
@@ -311,6 +374,7 @@ def main():
     for name, fn in (
         ("labels do not collide", check_labels_do_not_collide),
         ("bearings sit nearest their leg", check_bearing_hugs_its_leg),
+        ("distances stay in their parcel", check_distance_stays_in_its_parcel),
     ):
         print(f"== {name} ==")
         errors = fn(out_dir)

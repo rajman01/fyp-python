@@ -13,6 +13,7 @@ from ezdxf import bbox
 from ezdxf.enums import TextEntityAlignment
 
 from dxf_manager import PAPER_SIZES, SurveyDXFManager
+import label_placement
 from label_placement import LabelSpace, rect_corners
 from models.plan import (
     BEACON_SYMBOL_MAX_MM,
@@ -99,6 +100,13 @@ SQUARE_METRES_PER_HECTARE = 10_000
 HECTARE_DECIMALS = 3
 
 
+#: How much of the one-sided label reach to lean the drawing by when centring
+#: it. See :meth:`BasePlan._label_reach`: the direction is a preference the
+#: placer can override, so half is the closest a figure fixed before drawing
+#: can get to both the plan whose ids all hang right and the plan whose do not.
+LABEL_LEAN = 0.5
+
+
 class _LabelOption(NamedTuple):
     """One position a label would accept, and how to draw it there."""
     corners: list
@@ -109,6 +117,10 @@ class _PendingLabel(NamedTuple):
     """A label held back until the drawing it has to dodge is complete."""
     priority: int
     options: list
+    #: The kinds of reserved shape this label will move for. Not everything on
+    #: the sheet: see ``label_placement`` for why a leg label sits over a
+    #: building rather than leaving its parcel to avoid one.
+    avoids: frozenset
     #: Whether to accept the least crowded position when nothing is clear.
     #: True where the label is the only copy of its figure -- losing it would
     #: lose information. False where a schedule carries the same figure, and
@@ -379,15 +391,20 @@ class BasePlan(PlanProps):
         """How much further the drawing's ink runs than its coordinates, in
         model units, as (right, up).
 
-        One-sided: beacon ids are set up and to the right of their station,
-        so the left and bottom edges of the ink sit on the coordinates
-        themselves. That is now the placer's *first preference* rather than a
-        rule -- a station hemmed in by a parcel edge or a contour label gets
-        its id put somewhere else -- so this is an estimate. It is still much
-        closer than assuming no reach at all, which centres the coordinates
-        and leaves the plan visibly pushed left; and the room a displaced
-        label needs on the other side is already reserved, symmetrically, by
-        ``_annotation_margin_mm``.
+        Beacon ids are set up and to the right of their station, so on a plan
+        where every one of them gets its first choice the ink runs a full id
+        width past the coordinates on that side and sits on them on the other.
+        That is the placer's preference, not a rule: a station hemmed in by a
+        parcel edge has its id put somewhere else, and then the ink runs past
+        the coordinates on *both* sides and the right answer is no lean at
+        all.
+
+        So this is half the one-sided figure, which is the closest a value
+        fixed before anything is drawn can get to both cases. Assuming the
+        full reach pushes a plan with displaced ids visibly left; assuming
+        none pushes the ordinary plan visibly right. Either way the room a
+        label needs is reserved symmetrically by ``_annotation_margin_mm`` --
+        this only decides where the drawing sits between those margins.
         """
         ids = self._labelled_ids()
         if not ids:
@@ -396,7 +413,8 @@ class BasePlan(PlanProps):
         scale = self.group_scale("annotation")
         height_mm = TEXT_HEIGHTS_MM["beacon_label"] * scale
         width_mm = self._drawer.text_width(max(ids, key=len), height_mm)
-        return (width_mm * self.mm_to_model, height_mm * self.mm_to_model)
+        return (width_mm * self.mm_to_model * LABEL_LEAN,
+                height_mm * self.mm_to_model * LABEL_LEAN)
 
     def _annotation_margin_mm(self) -> float:
         """Clearance the drawing needs beyond the survey extent, in printed mm.
@@ -1098,10 +1116,25 @@ class BasePlan(PlanProps):
         # which is only the cap height, leaves out.
         return rect_corners(cx, cy, width + gap * 2, height * 1.35 + gap, angle)
 
-    def queue_label(self, priority: int, options: list, crowded_ok: bool) -> None:
+    #: What the survey's own annotation moves for: the lines of the survey,
+    #: and each other. Deliberately not the detail drawn inside those lines --
+    #: a layout plan's buildings and roads, a plot's outline. A distance is
+    #: drawn inside its parcel, so dodging a building means leaving the parcel
+    #: altogether and landing on the bearing on the far side of the leg, which
+    #: is a worse sheet than a distance crossing a building. Nor the text that
+    #: is pinned to its own position -- contour heights, spot heights, the
+    #: quoted grid values -- for the same reason.
+    ANNOTATION_AVOIDS: ClassVar[frozenset] = frozenset(
+        (label_placement.OUTLINE, label_placement.LABEL))
+
+    def queue_label(self, priority: int, options: list, crowded_ok: bool,
+                    avoids: Optional[frozenset] = None) -> None:
         """Hold a label back until there is something to place it against."""
         if options:
-            self._pending_labels.append(_PendingLabel(priority, options, crowded_ok))
+            self._pending_labels.append(_PendingLabel(
+                priority, options,
+                self.ANNOTATION_AVOIDS if avoids is None else avoids,
+                crowded_ok))
 
     def _reserve_drawn_labels(self) -> None:
         """Treat every label already on the sheet as sheet that is taken.
@@ -1124,7 +1157,7 @@ class BasePlan(PlanProps):
                 (extents.extmax.x, extents.extmin.y),
                 (extents.extmax.x, extents.extmax.y),
                 (extents.extmin.x, extents.extmax.y),
-            ])
+            ], label_placement.FIXED_TEXT)
 
     def _place_pending_labels(self) -> None:
         """Draw the queued annotation, each label at its best free position.
@@ -1145,12 +1178,13 @@ class BasePlan(PlanProps):
         for pending in sorted(self._pending_labels, key=lambda item: item.priority):
             index = self._labels.place(
                 [option.corners for option in pending.options],
-                crowded_ok=pending.crowded_ok,
+                pending.avoids, crowded_ok=pending.crowded_ok,
             )
             if index is None:
                 continue
             pending.options[index].render()
-            self._labels.reserve(pending.options[index].corners)
+            self._labels.reserve(pending.options[index].corners,
+                                 label_placement.LABEL)
         self._pending_labels = []
 
     def draw_beacon(self, coord, height: Optional[float] = None) -> None:
@@ -1170,7 +1204,8 @@ class BasePlan(PlanProps):
         # The symbol is drawn now, so reserve it now: leg labels queued later
         # will route around it as well as around the id.
         clear = max(self.beacon_symbol_size, 1.0 * self._drawer.mm_to_model)
-        self._labels.reserve(rect_corners(x, y, clear, clear))
+        self._labels.reserve(rect_corners(x, y, clear, clear),
+                             label_placement.LABEL)
 
         label = getattr(coord, "id", None)
         if not label:

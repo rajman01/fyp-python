@@ -14,11 +14,22 @@ legs, and testing a rotated label by its axis-aligned bounding box reserves
 up to twice the area it really occupies -- on a busy sheet that is the
 difference between "there is no room" and a perfectly good gap.
 """
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Container, Dict, Iterable, List, Optional, Sequence, Tuple
 import math
 
 Point = Tuple[float, float]
 Poly = Sequence[Point]
+
+# What a reserved shape is. A label says which of these it will move for,
+# because "everything on the sheet" is the wrong answer: a layout plan draws
+# buildings inside its boundary, and a distance label that dodges those is
+# pushed clean out of the parcel and into the bearing on the other side. The
+# survey's own lines and the other labels are what a leg label has to respect;
+# what has been drawn *inside* the parcel it can sit over.
+OUTLINE = "outline"    #: the survey's own lines -- boundary and parcel edges
+DETAIL = "detail"      #: what is drawn within them -- buildings, roads, plots
+LABEL = "label"        #: placed annotation, and the beacon symbols it serves
+FIXED_TEXT = "fixed"   #: text pinned to a position of its own, drawn directly
 
 
 # ----------------------------------------------------------------------
@@ -98,25 +109,26 @@ class LabelSpace:
         #: smaller than a label files it under many keys, and one much larger
         #: hands back neighbours that were never close.
         self._cell = cell if cell > 0 else 1.0
-        self._cells: Dict[Tuple[int, int], List[Poly]] = {}
+        self._cells: Dict[Tuple[int, int], List[Tuple[str, Poly]]] = {}
 
     # -- filling it in ------------------------------------------------
-    def reserve(self, poly: Poly) -> None:
-        """Mark a convex shape as taken."""
-        poly = list(poly)
-        for key in self._keys(bounds(poly)):
-            self._cells.setdefault(key, []).append(poly)
+    def reserve(self, poly: Poly, kind: str) -> None:
+        """Mark a convex shape as taken, and say what it is."""
+        item = (kind, list(poly))
+        for key in self._keys(bounds(item[1])):
+            self._cells.setdefault(key, []).append(item)
 
-    def reserve_outline(self, points: Sequence[Point], closed: bool = False) -> None:
+    def reserve_outline(self, points: Sequence[Point], kind: str,
+                        closed: bool = False) -> None:
         """Mark a polyline -- a parcel edge, a boundary, a road."""
         pts = [(p[0], p[1]) for p in points]
         if len(pts) < 2:
             return
         edges = zip(pts, pts[1:] + pts[:1]) if closed else zip(pts, pts[1:])
         for start, end in edges:
-            self._reserve_segment(start, end)
+            self._reserve_segment(start, end, kind)
 
-    def _reserve_segment(self, start: Point, end: Point) -> None:
+    def _reserve_segment(self, start: Point, end: Point, kind: str) -> None:
         # A long segment crosses far more cells than its two endpoints fall
         # in, and filing it under the bounding box of the whole thing would
         # put a diagonal parcel edge in every cell of the sheet. Cut it into
@@ -130,16 +142,19 @@ class LabelSpace:
                  start[1] + (end[1] - start[1]) * t_start),
                 (start[0] + (end[0] - start[0]) * t_end,
                  start[1] + (end[1] - start[1]) * t_end),
-            ])
+            ], kind)
 
     # -- asking about it ----------------------------------------------
-    def conflicts(self, poly: Poly) -> int:
-        """How many reserved shapes a position would run into."""
+    def conflicts(self, poly: Poly, kinds: Container[str]) -> int:
+        """How many reserved shapes of the kinds this label cares about a
+        position would run into."""
         poly = list(poly)
         seen = set()
         hits = 0
         for key in self._keys(bounds(poly)):
-            for other in self._cells.get(key, ()):
+            for kind, other in self._cells.get(key, ()):
+                if kind not in kinds:
+                    continue
                 marker = id(other)
                 if marker in seen:
                     continue
@@ -148,10 +163,10 @@ class LabelSpace:
                     hits += 1
         return hits
 
-    def is_clear(self, poly: Poly) -> bool:
-        return self.conflicts(poly) == 0
+    def is_clear(self, poly: Poly, kinds: Container[str]) -> bool:
+        return self.conflicts(poly, kinds) == 0
 
-    def place(self, candidates: Sequence[Poly],
+    def place(self, candidates: Sequence[Poly], kinds: Container[str],
               crowded_ok: bool = True) -> Optional[int]:
         """Index of the first candidate that lands on empty sheet.
 
@@ -161,7 +176,7 @@ class LabelSpace:
         """
         fallback: Optional[Tuple[int, int]] = None
         for index, poly in enumerate(candidates):
-            hits = self.conflicts(poly)
+            hits = self.conflicts(poly, kinds)
             if hits == 0:
                 return index
             if fallback is None or hits < fallback[0]:

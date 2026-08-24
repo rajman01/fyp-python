@@ -23,6 +23,7 @@ import tempfile
 import uuid
 import zipfile
 from datetime import datetime
+import label_placement
 from typing import List, Optional, Tuple
 
 import ezdxf
@@ -205,35 +206,42 @@ class SurveyDXFManager:
                 dxfattribs={"layer": "LABELS", "height": text_height, "style": "SURVEY_TEXT"},
             ).set_placement((x + offset, y + offset))
 
-    def add_parcel(self, points: List[Tuple[float, float]]):
+    def add_parcel(self, points: List[Tuple[float, float]],
+                   reserve_as: str = label_placement.OUTLINE):
+        """``reserve_as`` says what the polygon is to the labels that have to
+        share the sheet with it. A cadastral parcel is the survey's own line
+        and annotation moves for it; a layout plot is one of dozens drawn
+        inside a boundary, and annotation that moved for those would have
+        nowhere left inside the boundary at all."""
         points = [(x, y) for x, y, *_ in points]
         if self.label_space is not None:
-            self.label_space.reserve_outline(points, closed=True)
+            self.label_space.reserve_outline(points, reserve_as, closed=True)
         self.msp.add_lwpolyline(points, close=True, dxfattribs={"layer": "PARCELS"})
 
     def add_boundary(self, points: List[Tuple[float, float]]):
         points = [(x, y) for x, y, *_ in points]
         if self.label_space is not None:
-            self.label_space.reserve_outline(points, closed=True)
+            self.label_space.reserve_outline(points, label_placement.OUTLINE, closed=True)
         self.msp.add_lwpolyline(points, close=True, dxfattribs={"layer": "BOUNDARY"})
 
     def add_buildable(self, points: List[Tuple[float, float]]):
         points = [(x, y) for x, y, *_ in points]
         if self.label_space is not None:
-            self.label_space.reserve_outline(points, closed=True)
+            self.label_space.reserve_outline(points, label_placement.DETAIL, closed=True)
         self.msp.add_lwpolyline(points, close=True, dxfattribs={"layer": "BUILDABLE"})
 
     def add_road_cl(self, points: List[Tuple[float, float]]):
-        # Deliberately not reserved: the road name belongs on its centreline,
-        # so treating the centreline as occupied would push every name off the
-        # road it names. The carriageway edges are reserved instead.
         points = [(x, y) for x, y, *_ in points]
+        if self.label_space is not None:
+            # Filed as detail, which the labels that sit on roads do not move
+            # for -- a road name belongs on its own centreline.
+            self.label_space.reserve_outline(points, label_placement.DETAIL)
         self.msp.add_lwpolyline(points, dxfattribs={"layer": "ROADS_CL"})
 
     def add_road(self, points: List[Tuple[float, float]]):
         points = [(x, y) for x, y, *_ in points]
         if self.label_space is not None:
-            self.label_space.reserve_outline(points, closed=False)
+            self.label_space.reserve_outline(points, label_placement.DETAIL, closed=False)
         self.msp.add_lwpolyline(points, dxfattribs={"layer": "ROADS"})
 
     def add_polyline(self, points: List[Tuple[float, float]], layer: str, close: bool = False):
