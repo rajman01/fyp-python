@@ -27,6 +27,7 @@ from werkzeug.utils import secure_filename
 from cad_import import CadImportError, inspect_drawing
 from point_stream import PointStreamError, read_plan_stream
 from progress import JobProgress
+from models.plan import STANDARD_SCALES
 from plans import CadastralPlan, LayoutPlan, RoutePlan, TopographicPlan
 
 logging.basicConfig(level=logging.INFO)
@@ -162,6 +163,97 @@ def generate_layout_plan():
 @app.post("/route/plan")
 def generate_route_plan():
     return generate_plan(RoutePlan, "Route")
+
+
+#: Plan types the scale endpoint answers for, by the same names the generate
+#: routes use.
+PLAN_TYPES = {
+    "cadastral": CadastralPlan,
+    "topographic": TopographicPlan,
+    "layout": LayoutPlan,
+    "route": RoutePlan,
+}
+
+
+@app.post("/<plan_type>/scale")
+def plan_scale_options(plan_type: str):
+    """Which standard scales this plan fits on its sheet, and which to use.
+
+    The engine already falls back to the largest standard scale that fits when
+    the requested one is too tight, and until now the only way to find that
+    out was to generate the plan and read the warning. That put the caller in
+    the position of offering a menu of scales without knowing which of them
+    were real: pick 1:1000 for a 200 m site and you get 1:5000 and a note
+    after the fact.
+
+    The answer lives here rather than in the caller because of what it depends
+    on -- the wrapped title's measured height, the schedule band's own column
+    widths, the annotation margin of the longest station id. Those are the
+    engine's own numbers, and a second implementation of them elsewhere would
+    be a second set to keep in step.
+
+    ``bounds`` may be given instead of shipping the survey: a topographic plan
+    is a million spot heights whose only bearing on the answer is the box they
+    occupy, and the caller can measure that box far more cheaply than it can
+    send it.
+    """
+    plan_cls = PLAN_TYPES.get(plan_type)
+    if plan_cls is None:
+        return jsonify({"error": f"Unknown plan type '{plan_type}'"}), 404
+
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "Request body must be a JSON object"}), 400
+
+    data = dict(data)
+    bounds = data.pop("bounds", None)
+
+    # Probed at the top of the ladder so building it never trips the
+    # does-not-fit check on the way in. The answer does not depend on the
+    # scale asked for -- see BasePlan.required_scale.
+    data["scale"] = max(STANDARD_SCALES)
+    data["fit_scale_to_sheet"] = True
+
+    try:
+        plan = plan_cls(**data)
+    except ValidationError as e:
+        return jsonify({
+            "error": "Invalid plan data",
+            "details": json.loads(e.json(include_url=False)),
+        }), 400
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+    if bounds is not None:
+        try:
+            plan._bounding_box = (
+                float(bounds["min_easting"]), float(bounds["min_northing"]),
+                float(bounds["max_easting"]), float(bounds["max_northing"]),
+            )
+        except (KeyError, TypeError, ValueError):
+            return jsonify({
+                "error": "bounds needs min_easting, min_northing, max_easting "
+                         "and max_northing",
+            }), 400
+
+    fits = plan.fitting_scales()
+    min_x, min_y, max_x, max_y = plan._bounding_box
+    return jsonify({
+        "scales": list(STANDARD_SCALES),
+        "fits": fits,
+        # What the sheet should default to: the one that fits and draws the
+        # plan largest. Null means no scale on the ladder is enough, which is
+        # a prompt for a bigger sheet, not a smaller scale.
+        "recommended": fits[0] if fits else None,
+        "required": plan.required_scale(),
+        "page_size": getattr(plan.page_size, "value", plan.page_size),
+        "page_orientation": getattr(plan.page_orientation, "value",
+                                    plan.page_orientation),
+        "ground": None if min_x is None else {
+            "width": max_x - min_x,
+            "height": max_y - min_y,
+        },
+    }), 200
 
 
 @app.post("/cad/inspect")

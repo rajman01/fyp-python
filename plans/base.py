@@ -283,6 +283,55 @@ class BasePlan(PlanProps):
                 self.name, self._text_scale_fit * 100,
             )
 
+    def required_scale(self) -> Optional[float]:
+        """The exact scale denominator at which this survey just fills its
+        sheet, or ``None`` when it has no extent to measure.
+
+        Worked entirely in printed millimetres, and that is what makes it
+        answerable before a frame exists: every ingredient of the usable area
+        -- the annotation margin, the schedule band, the title stack, the
+        footer -- is a printed size, the same number of millimetres at every
+        scale. Only the survey's own metres change with the scale, so one
+        division gives the answer for all of them at once.
+
+        The figure itself is not a scale anyone would draw at: it is the point
+        where the survey exactly touches the margins. See
+        :meth:`fitting_scales` for the ones that can actually be chosen.
+        """
+        min_x, min_y, max_x, max_y = self._bounding_box
+        if min_x is None or max_x is None:
+            return None
+
+        data_w, data_h = max_x - min_x, max_y - min_y
+
+        # The label margin is a fixed printed size, so it comes off the usable
+        # sheet. Adding it to the survey instead measured it at the scale
+        # being replaced, which left the resolver and the fit check
+        # disagreeing about whether a plan fit.
+        margin_mm = self._annotation_margin_mm()
+        printable_w_mm, _ = self.printable_area()
+        usable_w_mm = max(printable_w_mm - self._table_band_mm() - 2 * margin_mm, 1.0)
+        usable_h_mm = max(self._usable_height_mm() - 2 * margin_mm, 1.0)
+
+        return max(data_w / usable_w_mm, data_h / usable_h_mm) * 1000
+
+    def fitting_scales(self) -> List[int]:
+        """Standard scales this survey fits on this sheet, largest drawing
+        first. Empty when even the smallest scale on the ladder is too big for
+        the paper, which is a prompt for a larger sheet rather than a smaller
+        scale."""
+        needed = self.required_scale()
+        if needed is None:
+            return list(STANDARD_SCALES)
+        return [s for s in STANDARD_SCALES if s >= needed]
+
+    def smallest_fitting_scale(self) -> Optional[int]:
+        """The standard scale that fits and draws the plan largest -- what the
+        sheet should default to, and what the engine falls back to when the
+        requested scale is too tight."""
+        fitting = self.fitting_scales()
+        return fitting[0] if fitting else None
+
     def _resolve_scale_for_sheet(self) -> bool:
         """Zoom the plan out to the next standard scale that fits the sheet.
 
@@ -300,24 +349,16 @@ class BasePlan(PlanProps):
 
         data_w, data_h = max_x - min_x, max_y - min_y
 
-        # Worked entirely in printed millimetres. The label margin is a fixed
-        # printed size, so it comes off the usable sheet -- adding it to the
-        # survey instead measured it at the scale being replaced, which left
-        # the resolver and the fit check disagreeing about whether a plan fit.
-        margin_mm = self._annotation_margin_mm()
-        printable_w_mm, printable_h_mm = self.printable_area()
-        usable_w_mm = max(printable_w_mm - self._table_band_mm() - 2 * margin_mm, 1.0)
-        usable_h_mm = max(self._usable_height_mm() - 2 * margin_mm, 1.0)
-
-        needed = max(data_w / usable_w_mm, data_h / usable_h_mm) * 1000
-        if needed <= (self.scale or 1000):
+        needed = self.required_scale()
+        if needed is None or needed <= (self.scale or 1000):
             return False
 
-        fitted = None
-        if self.fit_scale_to_sheet:
-            fitted = next((s for s in STANDARD_SCALES if s >= needed), None)
+        fitted = self.smallest_fitting_scale()
+        if not self.fit_scale_to_sheet:
+            fitted = None
 
         if fitted is None:
+            printable_w_mm, printable_h_mm = self.printable_area()
             frame_w = printable_w_mm * self.mm_to_model
             frame_h = printable_h_mm * self.mm_to_model
             self._check_fits_sheet(data_w, data_h, frame_w, frame_h)

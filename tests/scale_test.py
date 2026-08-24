@@ -463,6 +463,67 @@ def check_sheet_frame(out_dir):
     return errors
 
 
+def check_scale_advice_matches_the_drawing(out_dir):
+    """The scale the endpoint recommends is the scale the plan comes out at.
+
+    This is the whole point of the endpoint. A caller offering a menu of
+    scales is offering choices the engine may quietly overrule -- ask for
+    1:1000 with a 200 m site and you get 1:5000 and a note afterwards. The
+    recommendation is only worth showing if it is the same number the drawing
+    lands on, which means it has to come from the same arithmetic, over the
+    same measured title, schedule band and annotation margin.
+    """
+    from app import app
+
+    errors = []
+    client = app.test_client()
+
+    # A site that does not fit A4 at the scale asked for, in the three
+    # arrangements that move the answer: the schedules take sheet from the
+    # drawing, and a bigger sheet gives it back.
+    corners = [(f"SBD 12{i:02d}",
+                543210.0 + (i % 4) * 44.0,
+                712345.0 + (i // 4) * 41.0) for i in range(12)]
+    base = payload(corners, scale=100)
+
+    for label, extra in (
+        ("plain sheet", {}),
+        ("bearing schedule", {"show_bearing_distance_table": True}),
+        ("both schedules", {"show_bearing_distance_table": True,
+                            "show_coordinate_table": True}),
+        ("A3", {"page_size": "A3"}),
+        ("landscape", {"page_orientation": "landscape"}),
+    ):
+        data = base | extra
+        response = client.post("/cadastral/scale", json=data)
+        if response.status_code != 200:
+            errors.append(f"{label}: the endpoint returned {response.status_code}")
+            continue
+        advice = response.get_json()
+
+        drawn = CadastralPlan(**data)
+        drawn.draw()
+
+        if advice["recommended"] != drawn.scale:
+            errors.append(
+                f"{label}: recommended 1:{advice['recommended']} but the plan "
+                f"was drawn at 1:{drawn.scale}")
+
+        # Everything it lists as fitting must actually fit, and everything it
+        # leaves out must not -- otherwise the menu is still guesswork.
+        for scale in advice["scales"]:
+            asked = CadastralPlan(**(data | {"scale": scale}))
+            asked.draw()
+            listed = scale in advice["fits"]
+            held = asked.scale == scale
+            if listed != held:
+                errors.append(
+                    f"{label}: 1:{scale} is {'listed' if listed else 'not listed'} "
+                    f"as fitting but the plan drew at 1:{asked.scale}")
+
+    return errors
+
+
 def main():
     out_dir = sys.argv[1] if len(sys.argv) > 1 else tempfile.mkdtemp(prefix="fyp_scale_")
     os.makedirs(out_dir, exist_ok=True)
@@ -480,6 +541,7 @@ def main():
         ("scale bar labels", check_scale_bar_labels),
         ("scale auto-fit", check_scale_autofit),
         ("sheet frame is the paper", check_sheet_frame),
+        ("scale advice matches the drawing", check_scale_advice_matches_the_drawing),
     ):
         print(f"== {name} ==")
         errors = fn(out_dir)
