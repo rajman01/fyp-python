@@ -51,9 +51,7 @@ class CadastralPlan(BasePlan):
     def draw_beacons(self):
         height = self.height("beacon_label", self.label_size)
         for coord in self.coordinates or []:
-            self._drawer.draw_beacon(
-                coord.easting, coord.northing, 0, height, coord.id,
-            )
+            self.draw_beacon(coord, height)
 
     def draw_parcels(self):
         if not self.parcels:
@@ -73,7 +71,7 @@ class CadastralPlan(BasePlan):
             for leg in parcel.legs:
                 self.add_leg_labels(leg, orientation)
 
-    def draw(self):
+    def draw_content(self):
         self.draw_beacons()
         self.draw_parcels()
         self.draw_frames()

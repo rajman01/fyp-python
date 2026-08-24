@@ -458,8 +458,7 @@ class LayoutPlan(BasePlan):
             if coord.id in seen:
                 continue
             seen.add(coord.id)
-            self._drawer.draw_beacon(coord.easting, coord.northing, 0,
-                                     self.height("beacon_label", self.label_size), coord.id)
+            self.draw_beacon(coord)
 
     def draw_roads(self):
         for road in self.roads or []:
@@ -632,7 +631,7 @@ class LayoutPlan(BasePlan):
             return self.layout_mode
         return LayoutMode.MANUAL if self.plots else LayoutMode.AUTO
 
-    def draw(self):
+    def draw_content(self):
         self._ensure_boundary_computations()
 
         if self._effective_layout_mode() == LayoutMode.AUTO:

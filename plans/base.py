@@ -9,9 +9,11 @@ import logging
 import math
 from typing import ClassVar, List, NamedTuple, Optional, Tuple
 
+from ezdxf import bbox
 from ezdxf.enums import TextEntityAlignment
 
 from dxf_manager import PAPER_SIZES, SurveyDXFManager
+from label_placement import LabelSpace, rect_corners
 from models.plan import (
     BEACON_SYMBOL_MAX_MM,
     TEXT_HEIGHTS_MM,
@@ -97,6 +99,23 @@ SQUARE_METRES_PER_HECTARE = 10_000
 HECTARE_DECIMALS = 3
 
 
+class _LabelOption(NamedTuple):
+    """One position a label would accept, and how to draw it there."""
+    corners: list
+    render: object
+
+
+class _PendingLabel(NamedTuple):
+    """A label held back until the drawing it has to dodge is complete."""
+    priority: int
+    options: list
+    #: Whether to accept the least crowded position when nothing is clear.
+    #: True where the label is the only copy of its figure -- losing it would
+    #: lose information. False where a schedule carries the same figure, and
+    #: an unreadable second copy is worse than none.
+    crowded_ok: bool
+
+
 class TableSpec(NamedTuple):
     """A schedule to be drawn on the sheet.
 
@@ -164,6 +183,13 @@ class BasePlan(PlanProps):
         self._frame_coords = self._setup_frame_coords()
         if not self._frame_coords:
             raise ValueError("Cannot determine frame coordinates without valid coordinates.")
+
+        # Annotation is queued rather than drawn on the spot, and placed once
+        # the geometry it has to dodge is all on the sheet. The drawer files
+        # the structural outlines here as it draws them.
+        self._pending_labels = []
+        self._labels = LabelSpace(cell=6.0 * self.mm_to_model)
+        self._drawer.label_space = self._labels
 
     # ------------------------------------------------------------------
     # Setup hooks
@@ -353,9 +379,15 @@ class BasePlan(PlanProps):
         """How much further the drawing's ink runs than its coordinates, in
         model units, as (right, up).
 
-        Beacon labels are set up and to the right of the point they belong to,
-        so this is one-sided: the left and bottom edges of the ink sit on the
-        coordinates themselves.
+        One-sided: beacon ids are set up and to the right of their station,
+        so the left and bottom edges of the ink sit on the coordinates
+        themselves. That is now the placer's *first preference* rather than a
+        rule -- a station hemmed in by a parcel edge or a contour label gets
+        its id put somewhere else -- so this is an estimate. It is still much
+        closer than assuming no reach at all, which centres the coordinates
+        and leaves the plan visibly pushed left; and the room a displaced
+        label needs on the other side is already reserved, symmetrically, by
+        ``_annotation_margin_mm``.
         """
         ids = self._labelled_ids()
         if not ids:
@@ -1010,71 +1042,214 @@ class BasePlan(PlanProps):
                 top_inset=top_inset,
             )
 
-    def add_leg_labels(self, leg: TraverseLegProps, orientation: str):
-        """Label a traverse leg with its distance (inside) and bearing (outside).
+    # ------------------------------------------------------------------
+    # Annotation placement
+    # ------------------------------------------------------------------
+    #: Where a beacon id is tried, in order of preference: up and to the right
+    #: first, which is where a surveyor expects to find it, then round the
+    #: compass. Components are -1/0/1 rather than a unit vector so the offset
+    #: below clears the symbol on each axis independently.
+    BEACON_LABEL_DIRECTIONS: ClassVar[tuple] = (
+        (1, 1), (1, 0), (0, 1), (-1, 1), (1, -1), (-1, 0), (0, -1), (-1, -1),
+    )
 
-        Silent when the bearing and distance schedule is on. The schedule
-        already lists every leg, and the drawing's copy is the one that has to
-        fit between two stations: at any scale where the parcel fills the
-        sheet those labels land on top of each other and on the beacon ids,
-        and the reader loses both the annotation and the drawing. One legible
-        copy in the schedule beats two illegible ones.
+    #: How far along a leg a label may slide, and how far off it may sit (in
+    #: multiples of the base offset). Offsets are the outer loop: staying near
+    #: the line the label belongs to matters more than staying at its middle.
+    LEG_LABEL_SLIDES: ClassVar[tuple] = (0.5, 0.38, 0.62, 0.28, 0.72)
+    LEG_LABEL_REACHES: ClassVar[tuple] = (1.0, 1.5, 2.1, 2.8)
+
+    def _label_gap(self) -> float:
+        """Clear sheet to keep around a label, so near-misses still read."""
+        return 0.6 * self._drawer.mm_to_model
+
+    def _label_box(self, text: str, cx: float, cy: float, height: float,
+                   angle: float = 0.0, width: Optional[float] = None) -> list:
+        """The sheet a label would take up at a position, breathing room
+        included. ``width`` overrides the measurement for labels padded out
+        to a set span."""
+        gap = self._label_gap()
+        if width is None:
+            width = self._drawer.text_width(text, height)
+        # 1.35 covers the descenders and leading that the DXF text height,
+        # which is only the cap height, leaves out.
+        return rect_corners(cx, cy, width + gap * 2, height * 1.35 + gap, angle)
+
+    def queue_label(self, priority: int, options: list, crowded_ok: bool) -> None:
+        """Hold a label back until there is something to place it against."""
+        if options:
+            self._pending_labels.append(_PendingLabel(priority, options, crowded_ok))
+
+    def _reserve_drawn_labels(self) -> None:
+        """Treat every label already on the sheet as sheet that is taken.
+
+        Contour heights, the quoted origin values, the reference grid: all of
+        them are pinned to geometry of their own and have nowhere else to go,
+        so the queued annotation is what moves around them. Reading them back
+        off the document is what makes that automatic -- a label drawn by any
+        route, now or later, is accounted for without its call site having to
+        know the placer exists.
         """
-        if self.show_bearing_distance_table:
+        for entity in self._drawer.msp:
+            if entity.dxftype() not in ("TEXT", "MTEXT"):
+                continue
+            extents = bbox.extents([entity])
+            if extents is None or not extents.has_data:
+                continue
+            self._labels.reserve([
+                (extents.extmin.x, extents.extmin.y),
+                (extents.extmax.x, extents.extmin.y),
+                (extents.extmax.x, extents.extmax.y),
+                (extents.extmin.x, extents.extmax.y),
+            ])
+
+    def _place_pending_labels(self) -> None:
+        """Draw the queued annotation, each label at its best free position.
+
+        Beacon ids go down before leg labels. An id is pinned to its station
+        and has only the eight positions around it, while a leg label can
+        slide anywhere along its leg and swing to either side -- giving the
+        constrained one first refusal is what stops it being squeezed out by
+        something that had somewhere else to go.
+        """
+        for pending in sorted(self._pending_labels, key=lambda item: item.priority):
+            index = self._labels.place(
+                [option.corners for option in pending.options],
+                crowded_ok=pending.crowded_ok,
+            )
+            if index is None:
+                continue
+            pending.options[index].render()
+            self._labels.reserve(pending.options[index].corners)
+        self._pending_labels = []
+
+    def draw_beacon(self, coord, height: Optional[float] = None) -> None:
+        """Draw a beacon symbol now and queue its id for a spot that is free.
+
+        A station id is the only place its name appears on the drawing, so it
+        is placed even where the sheet is crowded -- the eight positions are
+        tried in order and the least busy one wins.
+        """
+        if height is None:
+            height = self.height("beacon_label", self.label_size)
+        x, y = coord.easting, coord.northing
+
+        self._drawer.draw_beacon(x, y, 0, height, None)
+
+        # The symbol is drawn now, so reserve it now: leg labels queued later
+        # will route around it as well as around the id.
+        clear = max(self.beacon_symbol_size, 1.0 * self._drawer.mm_to_model)
+        self._labels.reserve(rect_corners(x, y, clear, clear))
+
+        label = getattr(coord, "id", None)
+        if not label:
             return
 
+        width = self._drawer.text_width(label, height)
+        options = []
+        for reach in (1.0, 1.9):
+            for step_x, step_y in self.BEACON_LABEL_DIRECTIONS:
+                cx = x + step_x * (clear * reach / 2 + width / 2)
+                cy = y + step_y * (clear * reach / 2 + height)
+                options.append(_LabelOption(
+                    self._label_box(label, cx, cy, height),
+                    (lambda text=label, px=cx, py=cy, h=height:
+                        self._drawer.add_label(text, px, py, height=h)),
+                ))
+        self.queue_label(priority=0, options=options, crowded_ok=True)
+
+    def add_leg_labels(self, leg: TraverseLegProps, orientation: str):
+        """Queue a leg's distance (inside the polygon) and bearing (outside).
+
+        Neither is drawn here. Both are offered to the placer as a spread of
+        positions -- sliding along the leg, standing further off it, and
+        failing that swapping sides -- and the one that lands on empty sheet
+        wins. Fixing them at the midpoint is what put distances on top of
+        station ids and bearings across the very line they measure.
+        """
         dx = leg.to.easting - leg.from_.easting
         dy = leg.to.northing - leg.from_.northing
         if dx == 0 and dy == 0:
             return
 
+        length = math.hypot(dx, dy)
         angle_deg = math.degrees(math.atan2(dy, dx))
+        # Keep text readable: left-to-right for horizontal-ish legs,
+        # bottom-to-top for vertical-ish ones (readability bias).
+        text_angle = readable_angle(angle_deg)
+        height = self.height("bearing_distance", self.label_size)
 
-        # Both labels sit at the leg midpoint: distance inside the polygon,
-        # bearing outside.
-        mid_x = (leg.from_.easting + leg.to.easting) / 2
-        mid_y = (leg.from_.northing + leg.to.northing) / 2
-
-        # Offset the labels perpendicular to the leg: distance towards the
-        # inside of the polygon, bearing towards the outside.
         inside, outside = line_normals(
             (leg.from_.easting, leg.from_.northing),
             (leg.to.easting, leg.to.northing),
             orientation,
         )
-        offset_distance = self._get_drawing_extent() * 0.02
-        length = math.hypot(*inside)
-        inside = (inside[0] / length * offset_distance, inside[1] / length * offset_distance)
-        outside = (outside[0] / length * offset_distance, outside[1] / length * offset_distance)
+        base_offset = self._get_drawing_extent() * 0.02
+        normal_length = math.hypot(*inside) or 1.0
+        inside = (inside[0] / normal_length, inside[1] / normal_length)
+        outside = (outside[0] / normal_length, outside[1] / normal_length)
 
-        bearing_x = mid_x + outside[0]
-        bearing_y = mid_y + outside[1]
-        mid_x += inside[0]
-        mid_y += inside[1]
+        def positions(preferred, other):
+            """Where the label would go, best first, preferred side then the
+            other -- a leg whose inside is full is better labelled outside
+            than not at all."""
+            for normal in (preferred, other):
+                for reach in self.LEG_LABEL_REACHES:
+                    for slide in self.LEG_LABEL_SLIDES:
+                        yield (leg.from_.easting + dx * slide + normal[0] * base_offset * reach,
+                               leg.from_.northing + dy * slide + normal[1] * base_offset * reach)
 
-        # Keep text readable: left-to-right for horizontal-ish legs,
-        # bottom-to-top for vertical-ish ones (readability bias).
-        text_angle = readable_angle(angle_deg)
-
-        leg_height = self.height("bearing_distance", self.label_size)
+        # A schedule listing the same figures makes a crowded second copy
+        # worth dropping; without one, the drawing is where they live.
+        crowded_ok = not self.show_bearing_distance_table
 
         if leg.distance is not None:
-            self._drawer.add_label(f"{leg.distance:.2f}m", mid_x, mid_y,
-                                   angle=text_angle, height=leg_height)
+            text = f"{leg.distance:.2f}m"
+            self.queue_label(
+                priority=1,
+                options=[
+                    _LabelOption(
+                        self._label_box(text, cx, cy, height, text_angle),
+                        (lambda px=cx, py=cy: self._drawer.add_label(
+                            text, px, py, angle=text_angle, height=height)),
+                    )
+                    for cx, cy in positions(inside, outside)
+                ],
+                crowded_ok=crowded_ok,
+            )
 
         if leg.bearing is None:
             return
 
         # Degrees and minutes as a single MText entity (professional
-        # convention), centered on the leg with the two parts spread apart
-        # so the label spans a fixed fraction of the leg.
+        # convention), the two parts spread apart so the label spans a fixed
+        # fraction of the leg. That spread is also what makes it the widest
+        # thing on the drawing, so if no spread position is free the compact
+        # form is offered next: a bearing that reads beats one that is
+        # elegantly spaced across two other labels.
         degrees_label = f"{format_number(leg.bearing.degrees, 'hundredth')}°"
         minutes_label = f"{format_number(leg.bearing.minutes, 'tenth')}'"
-        self._drawer.add_split_mtext_label(
-            degrees_label, minutes_label, bearing_x, bearing_y,
-            angle=text_angle, height=leg_height,
-            span=math.hypot(dx, dy) * 0.6,
-        )
+        span = length * 0.6
+
+        spread = [
+            _LabelOption(
+                self._label_box("", cx, cy, height, text_angle, width=span),
+                (lambda px=cx, py=cy: self._drawer.add_split_mtext_label(
+                    degrees_label, minutes_label, px, py,
+                    angle=text_angle, height=height, span=span)),
+            )
+            for cx, cy in positions(outside, inside)
+        ]
+        compact = f"{degrees_label} {minutes_label}"
+        tight = [
+            _LabelOption(
+                self._label_box(compact, cx, cy, height, text_angle),
+                (lambda px=cx, py=cy: self._drawer.add_label(
+                    compact, px, py, angle=text_angle, height=height)),
+            )
+            for cx, cy in positions(outside, inside)
+        ]
+        self.queue_label(priority=2, options=spread + tight, crowded_ok=crowded_ok)
 
     def draw_tables(self):
         """Draw the enabled schedules in the band reserved for them.
@@ -1241,6 +1416,17 @@ class BasePlan(PlanProps):
     # Output
     # ------------------------------------------------------------------
     def draw(self):
+        """Draw the sheet, then place the annotation it has room for.
+
+        Subclasses fill in ``draw_content``. Labels queued during it are held
+        until every line is down, because a label cannot dodge geometry that
+        has not been drawn yet.
+        """
+        self.draw_content()
+        self._reserve_drawn_labels()
+        self._place_pending_labels()
+
+    def draw_content(self):
         raise NotImplementedError
 
     def save_dxf(self, file_path: str):

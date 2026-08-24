@@ -134,10 +134,7 @@ class TopographicPlan(BasePlan):
             if coord.id in seen:
                 continue
             seen.add(coord.id)
-            self._drawer.draw_beacon(
-                coord.easting, coord.northing, 0,
-                self.height("beacon_label", self.label_size), coord.id,
-            )
+            self.draw_beacon(coord)
 
     def visible_spot_heights(self) -> list:
         """Survey shots the sheet can carry as markers.
@@ -471,7 +468,7 @@ class TopographicPlan(BasePlan):
         self._drawer.toggle_layer("TIN_MESH", bool(show_tin_mesh))
         self._drawer.toggle_layer("GRID_MESH", bool(show_grid))
 
-    def draw(self):
+    def draw_content(self):
         self.draw_beacons()
         self.draw_topo_points()
         self.draw_boundary()

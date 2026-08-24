@@ -281,55 +281,66 @@ def check_pagination(out_dir):
     return errors
 
 
-def check_no_double_annotation(out_dir):
-    """A bearing and a distance are written once, not twice.
+def check_labels_do_not_collide(out_dir):
+    """No label sits on another label, on a beacon, or across a parcel line.
 
-    The legs carry their own bearing and distance labels, and the schedule
-    lists the same figures. Printing both puts the drawing's copy between the
-    stations, where it has the least room and collides with the beacon ids --
-    so when the schedule is switched on the legs go bare.
+    The drawing is annotated from a fixed formula -- distance inside the
+    polygon, bearing outside, both at the leg midpoint, id up and right of the
+    station -- and on any parcel whose legs are short relative to its text
+    those positions coincide. The placer is what turns the formula into a
+    preference, so this checks the outcome it exists for rather than the
+    positions it happened to choose.
     """
     errors = []
 
-    # A leg distance, exactly as add_leg_labels writes it: "42.86m". The grid
-    # origin labels ("538420.0mE") are the reason this is anchored at both
-    # ends rather than a substring search.
-    is_distance = re.compile(r"^\d+\.\d{2}m$").match
+    def annotation(doc):
+        """Every drawn label, as the sheet it occupies. Schedules excluded:
+        they have a reserved band and are checked by check_no_overlap."""
+        boxes = []
+        for entity in doc.modelspace():
+            if entity.dxftype() not in ("TEXT", "MTEXT"):
+                continue
+            if entity.dxf.layer in ("TABLES", "TEXT"):
+                continue
+            extents = bbox.extents([entity])
+            if extents is not None and extents.has_data:
+                boxes.append((_describe(entity), extents))
+        return boxes
 
-    def leg_labels(doc):
-        """The distances the drawing itself writes along the legs."""
-        msp = doc.modelspace()
-        text = [e.dxf.text for e in msp.query("TEXT") if e.dxf.layer != "TABLES"]
-        text += [e.text for e in msp.query("MTEXT") if e.dxf.layer != "TABLES"]
-        return [t for t in text if is_distance(t.strip())]
+    def _describe(entity):
+        return entity.dxf.text if entity.dxftype() == "TEXT" else entity.text
 
     for name, cls, payload, _ in CASES:
-        if name == "layout":       # its parcels carry no legs in this fixture
-            continue
+        for label, extra in (("bare", {}), ("with schedules", TABLES_ON)):
+            plan, doc = _build(cls, payload(**extra), out_dir,
+                               f"{name}_collide_{label.split()[0]}")
+            boxes = annotation(doc)
 
-        _, off = _build(cls, payload(), out_dir, f"{name}_legs_off")
-        bare = leg_labels(off)
-        if not bare:
-            errors.append(f"{name}: no leg labels at all with the schedule off")
-
-        _, on = _build(cls, payload(show_bearing_distance_table=True),
-                       out_dir, f"{name}_legs_on")
-        repeated = leg_labels(on)
-        if repeated:
-            errors.append(
-                f"{name}: {len(repeated)} leg label(s) still drawn alongside the "
-                f"schedule, e.g. {repeated[0]!r}")
-
-        # Only the bearing schedule stands in for them -- a coordinate
-        # register lists no distances, so the legs must keep their own.
-        _, coords_only = _build(cls, payload(show_coordinate_table=True),
-                                out_dir, f"{name}_legs_coords")
-        if not leg_labels(coords_only):
-            errors.append(
-                f"{name}: legs went bare for a coordinate register, which "
-                f"lists no bearings or distances to replace them")
+            # An axis-aligned box around rotated text overstates its area, so
+            # a small shared corner is not evidence of a collision the reader
+            # would see. Anything past a third of the smaller label is.
+            for i in range(len(boxes)):
+                for j in range(i + 1, len(boxes)):
+                    (first, a), (second, b) = boxes[i], boxes[j]
+                    shared = _shared_area(a, b)
+                    smaller = min(_area(a), _area(b))
+                    if smaller > 0 and shared > smaller * 0.34:
+                        errors.append(
+                            f"{name} ({label}): {first!r} and {second!r} overlap "
+                            f"by {shared / smaller:.0%} of the smaller")
 
     return errors
+
+
+def _area(extents):
+    return ((extents.extmax.x - extents.extmin.x)
+            * (extents.extmax.y - extents.extmin.y))
+
+
+def _shared_area(a, b):
+    width = min(a.extmax.x, b.extmax.x) - max(a.extmin.x, b.extmin.x)
+    height = min(a.extmax.y, b.extmax.y) - max(a.extmin.y, b.extmin.y)
+    return max(width, 0.0) * max(height, 0.0)
 
 
 def main():
@@ -342,7 +353,7 @@ def main():
         ("no overlap with the sheet", check_no_overlap),
         ("schedule values", check_values),
         ("pagination", check_pagination),
-        ("legs are not labelled twice", check_no_double_annotation),
+        ("labels do not collide", check_labels_do_not_collide),
     ):
         print(f"== {name} ==")
         errors = fn(out_dir)

@@ -84,6 +84,10 @@ class SurveyDXFManager:
         display size and hatch pattern spacing)."""
         self.plan_name = plan_name
         self.mm_to_model = mm_to_model
+        #: Set by the plan when it wants annotation kept off the drawing. The
+        #: structural outlines register themselves here as they are drawn, so
+        #: a label placed later knows where the lines are.
+        self.label_space = None
         self.dxf_version = dxf_version
         self.doc = ezdxf.new(dxfversion=dxf_version)
         self.msp = self.doc.modelspace()
@@ -203,22 +207,32 @@ class SurveyDXFManager:
 
     def add_parcel(self, points: List[Tuple[float, float]]):
         points = [(x, y) for x, y, *_ in points]
+        if self.label_space is not None:
+            self.label_space.reserve_outline(points, closed=True)
         self.msp.add_lwpolyline(points, close=True, dxfattribs={"layer": "PARCELS"})
 
     def add_boundary(self, points: List[Tuple[float, float]]):
         points = [(x, y) for x, y, *_ in points]
+        if self.label_space is not None:
+            self.label_space.reserve_outline(points, closed=True)
         self.msp.add_lwpolyline(points, close=True, dxfattribs={"layer": "BOUNDARY"})
 
     def add_buildable(self, points: List[Tuple[float, float]]):
         points = [(x, y) for x, y, *_ in points]
+        if self.label_space is not None:
+            self.label_space.reserve_outline(points, closed=True)
         self.msp.add_lwpolyline(points, close=True, dxfattribs={"layer": "BUILDABLE"})
 
     def add_road_cl(self, points: List[Tuple[float, float]]):
         points = [(x, y) for x, y, *_ in points]
+        if self.label_space is not None:
+            self.label_space.reserve_outline(points, closed=False)
         self.msp.add_lwpolyline(points, dxfattribs={"layer": "ROADS_CL"})
 
     def add_road(self, points: List[Tuple[float, float]]):
         points = [(x, y) for x, y, *_ in points]
+        if self.label_space is not None:
+            self.label_space.reserve_outline(points, closed=False)
         self.msp.add_lwpolyline(points, dxfattribs={"layer": "ROADS"})
 
     def add_polyline(self, points: List[Tuple[float, float]], layer: str, close: bool = False):

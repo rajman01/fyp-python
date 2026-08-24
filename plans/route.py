@@ -467,7 +467,7 @@ class RoutePlan(BasePlan):
         ]
         self._drawer.add_profile(points)
 
-    def draw(self):
+    def draw_content(self):
         self.draw_grid()
         self.draw_profile_line()
         self.draw_plan_view()
