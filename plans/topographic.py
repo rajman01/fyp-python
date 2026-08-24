@@ -10,6 +10,7 @@ import logging
 import math
 from typing import ClassVar, List, Optional, Tuple
 
+from ezdxf.enums import TextEntityAlignment
 import numpy as np
 import shapely
 from contourpy import LineType, contour_generator
@@ -24,6 +25,7 @@ from models.plan import (
     CONTOUR_GRID_MAX,
     CONTOUR_GRID_MIN,
     SPOT_HEIGHT_SPACING_MM,
+    TEXT_HEIGHTS_MM,
     TOPO_POINT_SPACING_MM,
     TOPO_POINT_SYMBOL_MM,
     CoordinateProps,
@@ -32,7 +34,7 @@ from models.plan import (
 from point_stream import thin_for_display
 
 logger = logging.getLogger(__name__)
-from plans.base import BasePlan, TableSpec
+from plans.base import ANNOTATION_MARGIN_MM, BasePlan, TableSpec
 from utils import polygon_orientation
 
 
@@ -272,6 +274,41 @@ class TopographicPlan(BasePlan):
             return []
         return [str(c.id) for c in (boundary.coordinates or []) if c.id not in (None, "")]
 
+    def _annotation_margin_mm(self) -> float:
+        """Clearance the sheet needs beyond the survey, in printed mm.
+
+        The reference grid prints a coordinate outside every edge of itself,
+        so the widest of those is what the sheet has to hold beyond the data
+        -- the same role the longest station id plays on a plan without a
+        grid, and larger than any of them. It costs nothing when the grid is
+        switched off.
+
+        This is why turning the grid on can drop a plan to the next scale
+        down: the labels were always drawn, but while they ran *inward* over
+        the mesh they took no sheet, and reading a coordinate off contours it
+        was printed across was the price.
+        """
+        margin = super()._annotation_margin_mm()
+        if not self._reference_grid_drawn():
+            return margin
+
+        min_x, min_y, max_x, max_y = self._bounding_box
+        if max_x is None or max_y is None:
+            return margin
+
+        # The widest single label, not their sum: the row labels, the column
+        # labels and the corner pairs each run outward from a different part
+        # of the grid's edge, so they share the margin rather than stacking in
+        # it.
+        scale = self.group_scale("annotation")
+        label_mm = TEXT_HEIGHTS_MM["grid_label"] * scale
+        widest = max(
+            self._drawer.text_width(f"N: {max_y:.2f}", label_mm),
+            self._drawer.text_width(f"E: {max_x:.2f}", label_mm),
+            self._drawer.text_width(f"({max_x:.1f}, {max_y:.1f})", label_mm),
+        )
+        return max(margin, ANNOTATION_MARGIN_MM * scale + widest)
+
     def _label_reach(self):
         # The reference grid prints "(easting, northing)" at each corner,
         # running right from the corner it belongs to -- wider than any
@@ -314,23 +351,54 @@ class TopographicPlan(BasePlan):
         label_h = self.height("grid_label", 2)
         lead = label_h  # gap between the grid edge and the label
 
+        # Every value sits outside the mesh, on all four sides. Which side a
+        # label ends up on is decided by its anchor, not by its position: the
+        # left and bottom labels are placed clear of the grid but ran *back*
+        # towards it because the text started at the point instead of ending
+        # there, so a coordinate the reader needs at a glance was printed
+        # across the contours it was meant to reference.
+        starts_at_point = TextEntityAlignment.MIDDLE_LEFT   # runs outward
+        ends_at_point = TextEntityAlignment.MIDDLE_RIGHT    # runs back outward
+
+        # The origin's own easting and northing are quoted on their own ticks
+        # in these margins, and the grid line the origin sits on is usually a
+        # corner of the survey and so a line of the grid. Both would then be
+        # printed on top of each other: same coordinate, same line, same
+        # strip. The grid gives way, because the value it would repeat is
+        # already there.
+        origin = self._north_arrow_reference()
+        clash = label_h + self.height("quoted_coordinate", self.label_size)
+
+        def quoted_by_origin(value: float, axis: str) -> bool:
+            if origin is None:
+                return False
+            return abs(value - getattr(origin, axis)) < clash
+
         # Horizontal lines (constant northing) with labels at both edges
         for i in range(0, grid_x.shape[0], step):
             northing = grid_y[i, 0]
             self._drawer.add_grid_mesh([(x_min, northing, z_grid), (x_max, northing, z_grid)])
+            if quoted_by_origin(northing, "northing"):
+                continue
             self._drawer.add_grid_mesh_label(x_min - lead, northing, z_grid,
-                                             f"N: {northing:.2f}", label_h, rotation=0)
-            self._drawer.add_grid_mesh_label(x_max + lead / 2, northing, z_grid,
-                                             f"{northing:.2f}", label_h, rotation=0)
+                                             f"N: {northing:.2f}", label_h, rotation=0,
+                                             alignment=ends_at_point)
+            self._drawer.add_grid_mesh_label(x_max + lead, northing, z_grid,
+                                             f"{northing:.2f}", label_h, rotation=0,
+                                             alignment=starts_at_point)
 
         # Vertical lines (constant easting) with labels at both edges
         for j in range(0, grid_x.shape[1], step):
             easting = grid_x[0, j]
             self._drawer.add_grid_mesh([(easting, y_min, z_grid), (easting, y_max, z_grid)])
+            if quoted_by_origin(easting, "easting"):
+                continue
             self._drawer.add_grid_mesh_label(easting, y_min - lead, z_grid,
-                                             f"E: {easting:.2f}", label_h, rotation=90)
-            self._drawer.add_grid_mesh_label(easting, y_max + lead / 2, z_grid,
-                                             f"{easting:.2f}", label_h, rotation=90)
+                                             f"E: {easting:.2f}", label_h, rotation=90,
+                                             alignment=ends_at_point)
+            self._drawer.add_grid_mesh_label(easting, y_max + lead, z_grid,
+                                             f"{easting:.2f}", label_h, rotation=90,
+                                             alignment=starts_at_point)
 
         # Border and corner coordinates
         self._drawer.add_grid_mesh_border([
@@ -341,9 +409,19 @@ class TopographicPlan(BasePlan):
             (x_min, y_min, z_grid),
         ])
 
+        # Corner pairs go diagonally outward. That is enough to keep them off
+        # the edge labels without pushing them further out: a row label sits
+        # beside the grid at a row's own northing and a column label below it
+        # at a column's easting, so the diagonal beyond a corner -- past the
+        # end of both runs -- is the one part of the margin nothing else uses.
         for x, y in ((x_min, y_min), (x_max, y_min), (x_max, y_max), (x_min, y_max)):
-            self._drawer.add_grid_mesh_label(x, y, z_grid, f"({x:.1f}, {y:.1f})",
-                                             label_h, rotation=0)
+            left = x == x_min
+            self._drawer.add_grid_mesh_label(
+                x - lead if left else x + lead,
+                y - lead if y == y_min else y + lead,
+                z_grid, f"({x:.1f}, {y:.1f})", label_h, rotation=0,
+                alignment=ends_at_point if left else starts_at_point,
+            )
 
     def _create_interpolation_grid(self, interpolator, grid_size: Optional[int] = None):
         grid_size = grid_size or self.contour_grid_size()

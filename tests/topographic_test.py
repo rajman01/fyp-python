@@ -19,6 +19,7 @@ import sys
 import tempfile
 
 import ezdxf
+from ezdxf import bbox
 from pydantic import ValidationError
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -226,6 +227,51 @@ def check_interval_validation():
     return errors
 
 
+def check_grid_labels_sit_outside(out_dir):
+    """Every reference-grid coordinate is drawn beyond the mesh, not across it.
+
+    The grid exists so a reader can pick a coordinate off the sheet, and a
+    value printed over the contours it is meant to reference defeats both: the
+    number is hard to read and it hides what the mesh is showing. Which side
+    of the edge a label lands on is decided by its anchor, not its position --
+    the left and bottom values were placed clear of the grid but ran back
+    across it, because the text started at the point given instead of ending
+    there.
+    """
+    errors = []
+    doc = _build(out_dir, "grid_labels", show_grid=True, grid=False)
+    msp = doc.modelspace()
+
+    mesh = [e for e in msp
+            if e.dxf.layer == "GRID_MESH" and e.dxftype() != "TEXT"]
+    labels = [e for e in msp
+              if e.dxf.layer == "GRID_MESH" and e.dxftype() == "TEXT"]
+    if not mesh:
+        return ["no reference grid was drawn, so nothing was checked"]
+    if not labels:
+        return ["the reference grid carried no labels, so nothing was checked"]
+
+    extent = bbox.extents(mesh)
+    # The mesh lines are the grid, so a label touching the outermost line by a
+    # hair is on the edge rather than across it.
+    tolerance = (extent.extmax.x - extent.extmin.x) * 0.002
+
+    for entity in labels:
+        box = bbox.extents([entity])
+        if box is None or not box.has_data:
+            continue
+        overlap_x = (min(extent.extmax.x, box.extmax.x)
+                     - max(extent.extmin.x, box.extmin.x))
+        overlap_y = (min(extent.extmax.y, box.extmax.y)
+                     - max(extent.extmin.y, box.extmin.y))
+        if overlap_x > tolerance and overlap_y > tolerance:
+            errors.append(
+                f"{entity.dxf.text!r} is drawn {overlap_x:.1f} x {overlap_y:.1f} "
+                f"inside the mesh it labels")
+
+    return errors
+
+
 def main():
     out_dir = sys.argv[1] if len(sys.argv) > 1 else tempfile.mkdtemp(prefix="fyp_topo_")
     os.makedirs(out_dir, exist_ok=True)
@@ -236,6 +282,8 @@ def main():
         ("dense spot heights", lambda: check_dense_spot_heights(out_dir)),
         ("contour interval label", lambda: check_contour_interval_label(out_dir)),
         ("interval validation", check_interval_validation),
+        ("grid labels sit outside the mesh",
+         lambda: check_grid_labels_sit_outside(out_dir)),
     ):
         print(f"== {name} ==")
         errors = fn()

@@ -750,14 +750,22 @@ class SurveyDXFManager:
         )
 
     def add_grid_mesh_label(self, x: float, y: float, z: float, label: str,
-                            text_height: float = 1.0, rotation: float = 0.0):
+                            text_height: float = 1.0, rotation: float = 0.0,
+                            alignment=TextEntityAlignment.MIDDLE_LEFT):
+        """A reference-grid coordinate value.
 
+        ``alignment`` is what decides which way the text runs from (x, y), and
+        it is in the text's own turned frame: MIDDLE_LEFT starts at the point
+        and runs along the rotation, MIDDLE_RIGHT ends at it and runs back.
+        That is how a label on the far side of a grid is kept off the mesh --
+        see ``TopographicPlan.draw_reference_grid``.
+        """
         self.msp.add_text(label, dxfattribs={
             "layer": "GRID_MESH",
             "height": text_height,
             "style": "SURVEY_TEXT",
             "rotation": rotation,
-        }).set_placement((x, y, z))
+        }).set_placement((x, y, z), align=alignment)
 
     def add_3d_contour(self, points: List[Tuple[float, float, float]], layer: str = "CONTOUR_MINOR"):
         self.msp.add_polyline3d(points, dxfattribs={"layer": layer})

@@ -1425,6 +1425,11 @@ class BasePlan(PlanProps):
         coordinate, so it is only ever reduced, never raised. A value that
         runs off its tick and into the drawing reads as a mistake on the
         sheet; a slightly smaller one does not.
+
+        Floored at the legible minimum, which means a value with very little
+        room overruns rather than shrinking out of readability. Nothing is
+        drawn in that margin for it to hit -- the one thing that would be, the
+        reference grid's own labels, leaves it a line to itself.
         """
         width = self._drawer.text_width(text, height)
         if width <= 0 or run <= 0 or width <= run:
@@ -1482,7 +1487,10 @@ class BasePlan(PlanProps):
 
         # One size for both. They are read as a pair, and two coordinate
         # values set at visibly different heights read as an error rather
-        # than as a fit, so whichever margin is tighter governs both.
+        # than as a fit, so whichever margin is tighter governs both. A value
+        # with no room at all is dropped rather than allowed to drag the other
+        # down with it -- once one of them is gone the remaining number is not
+        # half of a pair, and it may as well be set at the size it fits.
         grid_height = min(
             self._fit_grid_value(northing_text, quoted_height, northing_run),
             self._fit_grid_value(easting_text, quoted_height, easting_run),
