@@ -370,14 +370,32 @@ class RoutePlan(BasePlan):
                     alignment=alignment,
                 )
 
-        # View header (below the band) and rotated north arrow
+        # View header (below the band) and the north arrow
         header_x, header_y, header_h = self._plan_header
         self._drawer.add_text("PLAN", header_x, header_y, header_h,
                               alignment=TextEntityAlignment.TOP_CENTER)
 
         arrow_x, arrow_y, arrow_h = self._plan_arrow
-        self._drawer.draw_north_arrow(arrow_x, arrow_y, arrow_h,
-                                      rotation=-self._plan_rotation_deg)
+
+        # The arrow points up the sheet, not to true north.
+        #
+        # The plan view of a route is drawn along the sheet rather than in
+        # ground orientation -- the corridor is laid out left to right so the
+        # stations line up with the profile below it -- so the alignment is
+        # turned by ``_plan_rotation_deg`` and true north is turned with it.
+        # Pointing the arrow that way is geometrically right, and the line
+        # below did exactly that.
+        #
+        # Surveying convention is that the north arrow faces up the sheet, and
+        # a reader who sees it tilted reads it as the drawing being rotated
+        # rather than as this one view being laid out along the page. Kept
+        # here rather than deleted because the rotation is still correct for
+        # the view, and it is what would be wanted if the plan view were ever
+        # drawn in ground orientation.
+        #
+        # self._drawer.draw_north_arrow(arrow_x, arrow_y, arrow_h,
+        #                               rotation=-self._plan_rotation_deg)
+        self._drawer.draw_north_arrow(arrow_x, arrow_y, arrow_h, rotation=0.0)
 
     # ------------------------------------------------------------------
     # Longitudinal profile

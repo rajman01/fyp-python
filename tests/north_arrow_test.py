@@ -36,8 +36,10 @@ from ezdxf import bbox
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from smoke_test import cadastral_payload, layout_payload, topographic_payload  # noqa: E402
-from plans import CadastralPlan, LayoutPlan, TopographicPlan  # noqa: E402
+from smoke_test import (  # noqa: E402
+    cadastral_payload, layout_payload, route_payload, topographic_payload,
+)
+from plans import CadastralPlan, LayoutPlan, RoutePlan, TopographicPlan  # noqa: E402
 
 # Title lengths and font sizes both drive the title band's height, which is
 # what the arrow has to stay clear of.
@@ -249,12 +251,49 @@ def check_origin_grid(out_dir):
     return errors
 
 
+def check_route_arrow_faces_up(out_dir):
+    """The route sheet's north arrow points up the page.
+
+    The plan view of a route is laid out along the sheet rather than in ground
+    orientation, so true north is turned with it and an arrow drawn to true
+    north comes out tilted. That is geometrically right and it is what the
+    sheet used to do. Surveying convention is that the arrow faces up the
+    page, and a reader seeing it tilted takes it to mean the whole drawing is
+    rotated rather than that this one view is laid along the paper.
+    """
+    errors = []
+
+    plan = RoutePlan(**route_payload())
+    plan.draw()
+    plan.save_dxf(os.path.join(out_dir, "route_arrow.dxf"))
+
+    # The fixture is deliberately a route that runs at an angle; an alignment
+    # already running up the page would pass this whatever the code did.
+    if abs(plan._plan_rotation_deg) < 5.0:
+        errors.append(
+            f"the fixture alignment only turns {plan._plan_rotation_deg:.1f}deg, "
+            f"so a tilted arrow would look upright anyway")
+
+    arrows = [e for e in plan._drawer.msp.query("INSERT")
+              if e.dxf.name == "NORTH_ARROW"]
+    if not arrows:
+        return errors + ["no north arrow was drawn"]
+
+    for arrow in arrows:
+        turned = (float(arrow.dxf.rotation or 0.0)) % 360.0
+        if min(turned, 360.0 - turned) > 1e-6:
+            errors.append(f"the north arrow is turned {turned:.1f}deg off vertical")
+
+    return errors
+
+
 def main():
     out_dir = sys.argv[1] if len(sys.argv) > 1 else tempfile.mkdtemp(prefix="fyp_arrow_")
     os.makedirs(out_dir, exist_ok=True)
 
     failures = 0
     for name, fn in (("north arrow placement", check_arrow),
+                     ("route arrow faces up", check_route_arrow_faces_up),
                      ("origin grid ticks", check_origin_grid)):
         print(f"== {name} ==")
         errors = fn(out_dir)
