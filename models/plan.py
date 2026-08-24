@@ -93,7 +93,13 @@ TEXT_HEIGHTS_MM = {
     "spot_height": 1.5,     # topographic spot elevations
     "contour_label": 1.8,   # contour value labels
     "grid_label": 2.0,      # reference-grid coordinate labels
-    "table": 2.0,           # schedule / table cell text
+    # Smaller than the annotation on the map, deliberately. A schedule is read
+    # up close, a leg label is read in the context of the drawing -- and the
+    # schedule's own width is what decides how much sheet the drawing gets. At
+    # 2.0 mm two schedules took 70 mm of a 170 mm sheet and forced a survey
+    # from 1:1250 to 1:2500; at 1.6 mm the same schedules, with the same number
+    # of rows, leave it at 1:2000 and the drawing a quarter larger.
+    "table": 1.6,           # schedule / table cell text
     "general": 2.0,         # anything not otherwise classified
 }
 

@@ -1011,7 +1011,18 @@ class BasePlan(PlanProps):
             )
 
     def add_leg_labels(self, leg: TraverseLegProps, orientation: str):
-        """Label a traverse leg with its distance (inside) and bearing (outside)."""
+        """Label a traverse leg with its distance (inside) and bearing (outside).
+
+        Silent when the bearing and distance schedule is on. The schedule
+        already lists every leg, and the drawing's copy is the one that has to
+        fit between two stations: at any scale where the parcel fills the
+        sheet those labels land on top of each other and on the beacon ids,
+        and the reader loses both the annotation and the drawing. One legible
+        copy in the schedule beats two illegible ones.
+        """
+        if self.show_bearing_distance_table:
+            return
+
         dx = leg.to.easting - leg.from_.easting
         dy = leg.to.northing - leg.from_.northing
         if dx == 0 and dy == 0:

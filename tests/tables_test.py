@@ -18,6 +18,7 @@ submission. The checks here cover the two things that make that usable:
 
 import math
 import os
+import re
 import sys
 import tempfile
 
@@ -280,6 +281,57 @@ def check_pagination(out_dir):
     return errors
 
 
+def check_no_double_annotation(out_dir):
+    """A bearing and a distance are written once, not twice.
+
+    The legs carry their own bearing and distance labels, and the schedule
+    lists the same figures. Printing both puts the drawing's copy between the
+    stations, where it has the least room and collides with the beacon ids --
+    so when the schedule is switched on the legs go bare.
+    """
+    errors = []
+
+    # A leg distance, exactly as add_leg_labels writes it: "42.86m". The grid
+    # origin labels ("538420.0mE") are the reason this is anchored at both
+    # ends rather than a substring search.
+    is_distance = re.compile(r"^\d+\.\d{2}m$").match
+
+    def leg_labels(doc):
+        """The distances the drawing itself writes along the legs."""
+        msp = doc.modelspace()
+        text = [e.dxf.text for e in msp.query("TEXT") if e.dxf.layer != "TABLES"]
+        text += [e.text for e in msp.query("MTEXT") if e.dxf.layer != "TABLES"]
+        return [t for t in text if is_distance(t.strip())]
+
+    for name, cls, payload, _ in CASES:
+        if name == "layout":       # its parcels carry no legs in this fixture
+            continue
+
+        _, off = _build(cls, payload(), out_dir, f"{name}_legs_off")
+        bare = leg_labels(off)
+        if not bare:
+            errors.append(f"{name}: no leg labels at all with the schedule off")
+
+        _, on = _build(cls, payload(show_bearing_distance_table=True),
+                       out_dir, f"{name}_legs_on")
+        repeated = leg_labels(on)
+        if repeated:
+            errors.append(
+                f"{name}: {len(repeated)} leg label(s) still drawn alongside the "
+                f"schedule, e.g. {repeated[0]!r}")
+
+        # Only the bearing schedule stands in for them -- a coordinate
+        # register lists no distances, so the legs must keep their own.
+        _, coords_only = _build(cls, payload(show_coordinate_table=True),
+                                out_dir, f"{name}_legs_coords")
+        if not leg_labels(coords_only):
+            errors.append(
+                f"{name}: legs went bare for a coordinate register, which "
+                f"lists no bearings or distances to replace them")
+
+    return errors
+
+
 def main():
     out_dir = sys.argv[1] if len(sys.argv) > 1 else tempfile.mkdtemp(prefix="fyp_tables_")
     os.makedirs(out_dir, exist_ok=True)
@@ -290,6 +342,7 @@ def main():
         ("no overlap with the sheet", check_no_overlap),
         ("schedule values", check_values),
         ("pagination", check_pagination),
+        ("legs are not labelled twice", check_no_double_annotation),
     ):
         print(f"== {name} ==")
         errors = fn(out_dir)
