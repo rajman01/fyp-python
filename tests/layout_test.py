@@ -16,6 +16,7 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from ezdxf import bbox
 from shapely.geometry import Polygon
 
 from plans import LayoutPlan
@@ -161,6 +162,60 @@ def check_generate(plan: LayoutPlan) -> list:
     return errors
 
 
+#: How much clear sheet the schedule must keep from the origin values, in
+#: printed millimetres. Not zero: the two were only ~1 mm apart before, which
+#: is no overlap by measurement and reads as one on paper -- the table's left
+#: border ran straight down the origin tick.
+SCHEDULE_CLEARANCE_MM = 2.0
+
+
+def check_schedule_clears_origin_values(plan: LayoutPlan) -> list:
+    """The land-use schedule keeps clear of the quoted origin values.
+
+    The schedule sits in the band above the footer boxes, left-aligned with
+    the site. The vertical origin value runs up the sheet through that same
+    band, on a tick drawn at the origin's own easting -- so on a site whose
+    western edge *is* its origin, aligning the table with the site put its
+    left border straight down the tick and its first column against the
+    value.
+    """
+    errors = []
+
+    origin = plan._north_arrow_reference()
+    if origin is None:
+        return ["the plan quotes no origin, so nothing was checked"]
+
+    schedule = [e for e in plan._drawer.msp
+                if e.dxftype() == "TEXT" and str(e.dxf.text) in
+                ("LAND USE", "TOTAL", "ROADS / CIRCULATION")]
+    if not schedule:
+        return ["no land-use schedule was drawn, so nothing was checked"]
+    table = bbox.extents(schedule)
+
+    # The tick itself, and the value resting against it.
+    obstacles = [("the origin tick", origin.easting)]
+    for entity in plan._drawer.msp:
+        if entity.dxftype() != "TEXT" or not str(entity.dxf.text).endswith("mE"):
+            continue
+        value = bbox.extents([entity])
+        if value is None or not value.has_data:
+            continue
+        if value.extmin.y > table.extmax.y or value.extmax.y < table.extmin.y:
+            continue        # not in the schedule's band at all
+        obstacles.append((str(entity.dxf.text), value.extmax.x))
+
+    needed = SCHEDULE_CLEARANCE_MM * plan.mm_to_model
+    for what, edge in obstacles:
+        gap = table.extmin.x - edge
+        if gap < needed:
+            errors.append(
+                f"the land-use schedule leaves {gap / plan.mm_to_model:.1f} mm "
+                f"between itself and {what}, under the "
+                f"{SCHEDULE_CLEARANCE_MM:.0f} mm it needs to read as separate")
+
+    return errors
+
+
 def main():
     out_dir = sys.argv[1] if len(sys.argv) > 1 else tempfile.mkdtemp(prefix="fyp_layout_")
     os.makedirs(out_dir, exist_ok=True)
@@ -173,6 +228,14 @@ def main():
     plan.save_dxf(os.path.join(out_dir, "layout_generate.dxf"))
     with open(os.path.join(out_dir, "setting_out.csv"), "w") as f:
         f.write(plan.build_setting_out_csv())
+    for e in errors:
+        failures += 1
+        print("  FAIL:", e)
+    if not errors:
+        print("  OK")
+
+    print("== schedule clears the origin values ==")
+    errors = check_schedule_clears_origin_values(plan)
     for e in errors:
         failures += 1
         print("  FAIL:", e)

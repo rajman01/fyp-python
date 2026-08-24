@@ -46,7 +46,9 @@ from models.plan import (
     PlanType,
 )
 import label_placement
-from plans.base import FOOTER_HEIGHT_PERCENT, BasePlan, TableSpec, _LabelOption
+from plans.base import (
+    FOOTER_HEIGHT_PERCENT, GRID_LABEL_PAD_MM, BasePlan, TableSpec, _LabelOption,
+)
 from utils import polygon_orientation, readable_angle
 
 logger = logging.getLogger(__name__)
@@ -597,7 +599,21 @@ class LayoutPlan(BasePlan):
         footer_top = frame_bottom + (frame_top - frame_bottom) * FOOTER_HEIGHT_PERCENT
         table_height = row_height * len(rows)
 
+        # The vertical origin value runs up the sheet from the footer band --
+        # the same band this schedule sits in -- on a tick drawn at the
+        # origin's own easting, with the value resting against it. On a site
+        # whose western edge is that origin, starting the table at the edge of
+        # the site put its left border straight down the tick and its first
+        # column hard against the value. Start clear of both instead.
         x = min_x
+        origin = self._north_arrow_reference()
+        if origin is not None:
+            clear = origin.easting + GRID_LABEL_PAD_MM * self.mm_to_model
+            table_width = sum(col_widths)
+            # Not so far that the schedule leaves the sheet: a table pushed
+            # off the frame is worse than one close to the tick.
+            x = min(max(x, clear), frame_right - table_width)
+
         y = min(footer_top + table_height + row_height * 0.5, min_y - row_height * 0.5)
         self._drawer.draw_table(x, y, rows, col_widths, row_height, text_height)
 
