@@ -22,6 +22,7 @@ load_dotenv()
 from flask import Flask, jsonify, request
 from pydantic import ValidationError
 
+from werkzeug.exceptions import HTTPException
 from werkzeug.utils import secure_filename
 
 from cad_import import CadImportError, inspect_drawing
@@ -120,13 +121,38 @@ def generate_plan(plan_cls, plan_label: str):
             "details": json.loads(e.json(include_url=False)),
         }), 400
     except ValueError as e:
-        return jsonify({"error": str(e)}), 400
+        return jsonify({"error": str(e), "stage": "reading the plan"}), 400
 
-    progress.stage("drawing the plan", fraction=0.25)
-    plan.draw()
+    # Drawing and exporting raise ValueError for the things a user can do
+    # something about -- a survey too large for its sheet, a layout whose
+    # parameters produce no plots, a boundary that is not a polygon. Those
+    # messages name the problem and what to change, and they used to be thrown
+    # away: only building the plan was guarded, so anything raised past this
+    # point fell through to the catch-all and came back as "An unexpected
+    # error occurred". The caller then had nothing to show but its own generic
+    # line, which is what a user saw for a fault the engine had described
+    # exactly.
+    try:
+        progress.stage("drawing the plan", fraction=0.25)
+        plan.draw()
+    except ValueError as e:
+        app.logger.warning("%s plan could not be drawn: %s", plan_label, e)
+        return jsonify({"error": str(e), "stage": "drawing the plan"}), 400
 
-    progress.stage("exporting DXF, DWG and PDF", fraction=0.75)
-    key = plan.save()
+    try:
+        progress.stage("exporting DXF, DWG and PDF", fraction=0.75)
+        key = plan.save()
+    except ValueError as e:
+        app.logger.warning("%s plan could not be exported: %s", plan_label, e)
+        return jsonify({"error": str(e), "stage": "exporting the plan"}), 400
+    except RuntimeError as e:
+        # save() raises this when the archive cannot be uploaded, carrying the
+        # storage layer's own reason. The drawing is fine and the deployment
+        # is not, so this is a 502 and says as much -- blaming the plan for it
+        # sends whoever reads it looking in the wrong place.
+        app.logger.error("%s plan could not be stored: %s", plan_label, e)
+        return jsonify({"error": str(e), "stage": "storing the plan"}), 502
+
     return jsonify({
         "message": f"{plan_label} plan generated",
         "filename": plan.name,
@@ -357,6 +383,18 @@ def internal_error(e):
 
 @app.errorhandler(Exception)
 def handle_exception(e):
+    """Last resort, and deliberately vague.
+
+    Anything reaching here is a fault nobody anticipated, so there is no
+    message worth showing a surveyor -- the traceback goes to the log for us
+    instead. Faults a user *can* act on are answered where they are raised,
+    with the reason and the stage they happened in; see ``generate_plan``.
+    """
+    if isinstance(e, HTTPException):
+        # Flask's own aborts already carry a status and a description; turning
+        # a 405 into a 500 helps nobody.
+        return jsonify({"error": e.description}), e.code
+
     app.logger.error("Unhandled exception: %s", e, exc_info=True)
     return jsonify({"error": "An unexpected error occurred"}), 500
 
