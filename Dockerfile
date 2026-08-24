@@ -28,6 +28,28 @@ RUN apt-get update && apt-get install -y \
     fonts-urw-base35 \
     && rm -rf /var/lib/apt/lists/*
 
+# Arial, Times New Roman, Courier New, Georgia, Verdana, Trebuchet MS and the
+# rest of the Microsoft core set. The open faces above already carry these
+# designs at the same widths -- Liberation Sans is Arial's metrics, Tinos is
+# Times' -- so what this adds is the names themselves, which is what a
+# surveyor looks for on the font list and what a supervisor expects to read
+# on the sheet.
+#
+# Three things make it its own layer rather than part of the list above:
+# the package lives in Debian's contrib component, which the base image does
+# not enable; its licence has to be accepted before apt will proceed, and
+# there is no terminal here to accept it in; and it downloads the fonts from
+# SourceForge at build time, so this is the layer that fails when that host is
+# unreachable. Keeping it separate means a font-server outage cannot cost the
+# rest of the image.
+RUN sed -i "s/^Components: main$/Components: main contrib/" \
+        /etc/apt/sources.list.d/debian.sources \
+    && apt-get update \
+    && echo ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula \
+        select true | debconf-set-selections \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y ttf-mscorefonts-installer \
+    && rm -rf /var/lib/apt/lists/*
+
 # Download ODA File Converter AppImage (replace with the latest version)
 # RUN wget -O /tmp/ODAFileConverter.AppImage \
 #     https://www.opendesign.com/guestfiles/get?filename=ODAFileConverter_QT6_lnxX64_8.3dll_26.8.AppImage

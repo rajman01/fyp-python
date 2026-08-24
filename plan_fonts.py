@@ -133,7 +133,15 @@ SUPPORTED = (
                "Monospaced"),
     FontChoice("DejaVu Sans Mono", ("Liberation Mono", "FreeMono", "Courier New"),
                "Monospaced, wide"),
+    FontChoice("Andale Mono", ("Liberation Mono", "Cousine", "Nimbus Mono PS"),
+               "Monospaced, narrow"),
 )
+
+# Deliberately not offered, though the Microsoft core set installs them:
+# Comic Sans MS, Impact and Arial Black are display faces with no place on a
+# survey sheet, and Webdings has no letters at all. Leaving them out of the
+# menu is a judgement about what a plan should look like, not a limitation --
+# a plan saved with one would still be drawn in it.
 
 DEFAULT_FAMILY = "Arial"
 
