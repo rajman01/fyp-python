@@ -49,46 +49,90 @@ class FontChoice(NamedTuple):
 #: enumerating them would give every environment a different menu -- and most
 #: of what a laptop carries is no use on a survey plan anyway.
 #:
-#: The names are the ones a surveyor will look for, and behind each is the
-#: open face that stands in for it where it is absent. Those substitutes are
-#: chosen so the *choices stay distinct* on the container as well as on a
-#: developer machine: picking Palatino and picking Courier New should not
-#: produce the same sheet just because neither font is installed. All twelve
-#: resolve to twelve different faces on the deployed image.
+#: It holds both the names a surveyor will look for -- Arial, Times New Roman,
+#: Courier New -- and the open faces that carry the same designs, because
+#: which of the two a machine has depends on the machine. ``supported()``
+#: reports only the ones actually present, so each environment offers the
+#: fonts it can really draw rather than a menu that quietly substitutes.
+#:
+#: The substitutes behind each entry are still used, but only for a plan that
+#: was saved with a font this machine has since lost -- not for anything a
+#: user can pick today.
 SUPPORTED = (
-    # Sans
+    # -- Sans -------------------------------------------------------------
     FontChoice("Arial", ("Liberation Sans", "Arimo", "Nimbus Sans", "FreeSans",
                          "DejaVu Sans"),
                "Plain sans-serif; the usual choice"),
     FontChoice("Helvetica", ("Nimbus Sans", "Liberation Sans", "Arimo", "FreeSans"),
                "Sans-serif, slightly tighter than Arial"),
+    FontChoice("Liberation Sans", ("Arial", "Arimo", "Nimbus Sans"),
+               "Sans-serif, Arial widths"),
+    FontChoice("Arimo", ("Liberation Sans", "Arial", "Nimbus Sans"),
+               "Sans-serif, Arial widths"),
+    FontChoice("Nimbus Sans", ("Helvetica", "Liberation Sans", "Arial"),
+               "Sans-serif, Helvetica widths"),
+    FontChoice("FreeSans", ("Liberation Sans", "DejaVu Sans", "Arial"),
+               "Sans-serif, humanist"),
     FontChoice("Verdana", ("DejaVu Sans", "Liberation Sans", "Arimo"),
                "Sans-serif, wide; reads well at small sizes"),
+    FontChoice("DejaVu Sans", ("Verdana", "Liberation Sans", "FreeSans"),
+               "Sans-serif, wide; very broad character coverage"),
     FontChoice("Tahoma", ("Liberation Sans Narrow", "Nimbus Sans Narrow",
-                          "DejaVu Sans Condensed", "Liberation Sans"),
+                          "DejaVu Sans Condensed"),
                "Sans-serif, narrow; fits more in a column"),
+    FontChoice("Liberation Sans Narrow", ("Nimbus Sans Narrow", "Tahoma",
+                                          "DejaVu Sans Condensed"),
+               "Sans-serif, narrow"),
     FontChoice("Trebuchet MS", ("FreeSans", "DejaVu Sans", "Liberation Sans"),
                "Sans-serif, humanist"),
-    FontChoice("Century Gothic", ("URW Gothic", "FreeSans", "DejaVu Sans"),
+    FontChoice("Century Gothic", ("URW Gothic", "FreeSans"),
+               "Geometric sans-serif"),
+    FontChoice("URW Gothic", ("Century Gothic", "FreeSans"),
                "Geometric sans-serif"),
 
-    # Serif
+    # -- Serif ------------------------------------------------------------
     FontChoice("Times New Roman", ("Liberation Serif", "Tinos", "Nimbus Roman",
                                    "FreeSerif", "DejaVu Serif"),
                "Serif; traditional on cadastral sheets"),
-    FontChoice("Georgia", ("DejaVu Serif", "P052", "C059", "Liberation Serif"),
+    FontChoice("Liberation Serif", ("Times New Roman", "Tinos", "Nimbus Roman"),
+               "Serif, Times widths"),
+    FontChoice("Tinos", ("Liberation Serif", "Times New Roman", "Nimbus Roman"),
+               "Serif, Times widths"),
+    FontChoice("Nimbus Roman", ("Times New Roman", "Liberation Serif", "FreeSerif"),
+               "Serif, Times widths"),
+    FontChoice("FreeSerif", ("Liberation Serif", "DejaVu Serif", "Times New Roman"),
+               "Serif"),
+    FontChoice("Georgia", ("DejaVu Serif", "P052", "C059"),
                "Serif, wide; sturdy at small sizes"),
-    FontChoice("Palatino", ("P052", "URW Bookman", "FreeSerif"),
+    FontChoice("DejaVu Serif", ("Georgia", "FreeSerif", "Liberation Serif"),
+               "Serif, wide"),
+    FontChoice("Palatino", ("P052", "URW Bookman"),
                "Serif, calligraphic"),
-    FontChoice("Century Schoolbook", ("C059", "URW Bookman", "Liberation Serif"),
+    FontChoice("P052", ("Palatino", "URW Bookman"),
+               "Serif, calligraphic; Palatino widths"),
+    FontChoice("Century Schoolbook", ("C059", "URW Bookman"),
                "Serif, open; a drafting standard"),
-    FontChoice("Bookman Old Style", ("URW Bookman", "C059", "P052"),
+    FontChoice("C059", ("Century Schoolbook", "URW Bookman"),
+               "Serif, open; Century Schoolbook widths"),
+    FontChoice("Bookman Old Style", ("URW Bookman", "C059"),
                "Serif, heavy"),
+    FontChoice("URW Bookman", ("Bookman Old Style", "C059"),
+               "Serif, heavy; Bookman widths"),
 
-    # Monospaced
+    # -- Monospaced -------------------------------------------------------
     FontChoice("Courier New", ("Liberation Mono", "Cousine", "Nimbus Mono PS",
                                "FreeMono", "DejaVu Sans Mono"),
                "Monospaced; coordinates line up in columns"),
+    FontChoice("Liberation Mono", ("Courier New", "Cousine", "Nimbus Mono PS"),
+               "Monospaced, Courier widths"),
+    FontChoice("Cousine", ("Liberation Mono", "Courier New", "Nimbus Mono PS"),
+               "Monospaced, Courier widths"),
+    FontChoice("Nimbus Mono PS", ("Courier New", "Liberation Mono", "FreeMono"),
+               "Monospaced, Courier widths"),
+    FontChoice("FreeMono", ("Liberation Mono", "DejaVu Sans Mono", "Courier New"),
+               "Monospaced"),
+    FontChoice("DejaVu Sans Mono", ("Liberation Mono", "FreeMono", "Courier New"),
+               "Monospaced, wide"),
 )
 
 DEFAULT_FAMILY = "Arial"
@@ -179,22 +223,43 @@ def resolve(family: str) -> str:
 class FontReport(NamedTuple):
     family: str
     note: str
-    #: Whether this machine has the family itself.
-    installed: bool
-    #: The family that will actually be drawn -- itself, or a substitute.
-    drawn_as: str
 
 
 def supported() -> List[FontReport]:
-    """Every offered family, and what each would really be drawn with here."""
+    """The families this machine can draw as themselves.
+
+    Only the installed ones. Offering a family that will be quietly stood in
+    for makes the control a lie -- picking Verdana on the deployed image drew
+    DejaVu Sans, and the sheet gave no sign of it. A menu that is shorter on
+    one machine than another is the honest version of that: it is the machine
+    that differs.
+
+    Substitution still exists in :func:`resolve`, but only as a safety net for
+    a plan saved with a font that has since gone -- never for a choice offered
+    today.
+    """
+    seen = set()
     report = []
     for choice in SUPPORTED:
-        installed = _installed(choice.family) is not None
-        drawn_as = choice.family
-        if not installed:
-            drawn_as = next(
-                (s for s in choice.substitutes if _installed(s) is not None),
-                "",
-            )
-        report.append(FontReport(choice.family, choice.note, installed, drawn_as))
+        filename = _installed(choice.family)
+        if not filename or filename in seen:
+            # Two names for one face -- Arial and Liberation Sans on a machine
+            # that maps both to the same file -- would be two menu entries
+            # that draw the same sheet.
+            continue
+        seen.add(filename)
+        report.append(FontReport(choice.family, choice.note))
     return report
+
+
+def default_family() -> str:
+    """The family a new plan should start in.
+
+    ``DEFAULT_FAMILY`` when this machine has it, otherwise the first family it
+    does have. A default that is itself substituted would put every new plan
+    in a face nobody chose.
+    """
+    if _installed(DEFAULT_FAMILY):
+        return DEFAULT_FAMILY
+    available = supported()
+    return available[0].family if available else DEFAULT_FAMILY

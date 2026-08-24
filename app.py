@@ -170,24 +170,21 @@ def generate_route_plan():
 def list_fonts():
     """The fonts a plan can be drawn in on *this* machine.
 
-    Which fonts exist is a property of the container, not of the app, and the
-    two had drifted: the dropdown offered five families and the image carries
-    none of them by name, so every choice was drawn in the same fallback face.
-    Reporting what is installed lets the app offer fonts that will actually be
-    honoured, and say so when one will be substituted.
+    Only the families that are installed, so every entry is drawn as itself.
+    Which fonts exist is a property of the container rather than of the app,
+    and the two had drifted: the menu was five names written into the form and
+    the image carried none of them, so every choice came out in the same
+    fallback face. Offering a family that would be quietly stood in for is the
+    same fault in a smaller form -- picking Verdana drew DejaVu Sans and the
+    sheet gave no sign of it.
 
-    ``drawn_as`` is what the sheet really gets -- the family itself when it is
-    installed, otherwise the metric-compatible stand-in that is.
+    A shorter menu on one machine than another is the honest version of that.
+    It is the machine that differs.
     """
     return jsonify({
-        "default": plan_fonts.DEFAULT_FAMILY,
+        "default": plan_fonts.default_family(),
         "fonts": [
-            {
-                "family": report.family,
-                "note": report.note,
-                "installed": report.installed,
-                "drawn_as": report.drawn_as or None,
-            }
+            {"family": report.family, "note": report.note}
             for report in plan_fonts.supported()
         ],
     }), 200

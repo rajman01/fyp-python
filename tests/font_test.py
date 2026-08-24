@@ -8,14 +8,14 @@ A DXF text style names a font *file*, and the drawing service used to build
 that name by adding ".ttf" to the family the user chose. That is right only
 where a family and its file happen to share a name. On a developer Mac they
 often do, so the bug was invisible there; on the container the service runs
-in they never do, and every choice resolved to nothing and every sheet came
+in they never do, so every choice resolved to nothing and every sheet came
 out in the same fallback face.
 
-These checks are about resolution rather than about which fonts a particular
-machine has -- that differs between a laptop and the image, which is the whole
-reason ``plan_fonts`` exists. So: a family that is installed is drawn in
-itself, choices that resolve stay distinct from one another, and a family that
-is missing is substituted rather than dropped.
+These checks are about resolution and about the menu being honest, not about
+which fonts a particular machine has -- that differs between a laptop and the
+image, which is the whole reason ``plan_fonts`` exists. So: an offered family
+is drawn as itself, no two entries draw the same face, and a family that has
+gone missing is still substituted rather than dropped.
 """
 
 import os
@@ -30,18 +30,24 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from smoke_test import cadastral_payload  # noqa: E402
 
 
-def check_every_choice_resolves():
-    """No offered font leaves the sheet without one."""
-    errors = []
-    for choice in plan_fonts.SUPPORTED:
-        resolved = plan_fonts.resolve(choice.family)
-        if not resolved:
-            errors.append(f"{choice.family!r} resolved to nothing")
-    return errors
+def check_only_installed_fonts_are_offered():
+    """Nothing is offered that would be quietly substituted.
+
+    The menu is what a user can pick, so every entry has to be a family this
+    machine draws as itself. Offering one that is stood in for is the same
+    fault as the guessed filename, just quieter: picking Verdana on the
+    deployed image drew DejaVu Sans and nothing on the sheet said so.
+    """
+    return [
+        f"{report.family!r} is offered but is not installed here, so it would "
+        f"be drawn in something else"
+        for report in plan_fonts.supported()
+        if plan_fonts._installed(report.family) is None
+    ]
 
 
-def check_installed_families_are_used():
-    """A family this machine has is drawn in that family, not a lookalike.
+def check_an_offered_family_is_drawn_as_itself():
+    """The face used is one of that family's own.
 
     The matcher ezdxf offers scores families by similarity, and asked for
     "Arial" on this machine it answers Arial Unicode MS -- a different face
@@ -49,63 +55,55 @@ def check_installed_families_are_used():
     """
     errors = []
     for report in plan_fonts.supported():
-        if not report.installed:
-            continue
         resolved = plan_fonts.resolve(report.family)
         faces = {f.filename for f in plan_fonts._faces_of(report.family)}
         if resolved not in faces:
             errors.append(
-                f"{report.family!r} is installed but was drawn with {resolved!r}, "
+                f"{report.family!r} is offered but was drawn with {resolved!r}, "
                 f"which is not one of its faces")
     return errors
 
 
-def check_choices_stay_distinct():
-    """Fonts that resolve at all resolve to different files.
-
-    Not every family is installed everywhere, and one that is missing along
-    with all of its substitutes shares the fallback -- that is reported rather
-    than hidden. What must not happen is two *available* choices collapsing
-    onto one face, which is the state the whole menu was in.
-    """
+def check_no_two_entries_draw_the_same_face():
+    """Arial and Liberation Sans are one design under two names, and a machine
+    with both mapped to one file would list both -- two menu entries producing
+    the same sheet."""
     errors = []
     used = {}
     for report in plan_fonts.supported():
-        if not report.drawn_as:
-            continue        # nothing to draw it with here; reported as such
-        resolved = plan_fonts.resolve(report.family)
-        used.setdefault(resolved, []).append(report.family)
-
+        used.setdefault(plan_fonts.resolve(report.family), []).append(report.family)
     for resolved, families in used.items():
         if len(families) > 1:
-            errors.append(
-                f"{families} all resolve to {resolved!r}, so those choices "
-                f"cannot be told apart on the sheet")
-
-    if len(used) < 2:
-        errors.append(
-            f"only {len(used)} distinct face(s) available, so this machine "
-            f"cannot show the difference either way")
+            errors.append(f"{families} all draw {resolved!r}")
     return errors
+
+
+def check_the_default_is_installed():
+    """A new plan starts in a font this machine actually has, or every one of
+    them is drawn in a face nobody chose."""
+    default = plan_fonts.default_family()
+    if plan_fonts.supported() and plan_fonts._installed(default) is None:
+        return [f"the default {default!r} is not installed here"]
+    return []
 
 
 def check_a_missing_font_is_substituted():
-    """A family nothing can supply still draws, and says so."""
-    errors = []
-    resolved = plan_fonts.resolve("No Such Family At All")
-    if not resolved:
-        errors.append("an unknown family resolved to nothing at all")
-    return errors
+    """A plan saved with a font this machine has since lost still draws.
+
+    Substitution is kept for exactly this: not for anything offered today, but
+    for a plan that was made when the font was there.
+    """
+    if not plan_fonts.resolve("No Such Family At All"):
+        return ["an unknown family resolved to nothing at all"]
+    return []
 
 
-def check_the_sheet_uses_it():
-    """The resolved file reaches the drawing, and the sheet is measured with
-    it -- text widths decide the layout before anything is drawn."""
+def check_the_sheet_is_drawn_and_measured_with_it():
+    """The resolved file reaches the drawing, and the layout is measured with
+    it -- text widths decide the sheet before anything is drawn."""
     errors = []
     widths = {}
     for report in plan_fonts.supported():
-        if not report.installed:
-            continue
         data = cadastral_payload()
         data["font"] = report.family
         plan = CadastralPlan(**data)
@@ -115,10 +113,11 @@ def check_the_sheet_uses_it():
         expected = plan_fonts.resolve(report.family)
         if style != expected:
             errors.append(
-                f"{report.family!r}: the sheet's style is {style!r}, not {expected!r}")
+                f"{report.family!r}: the sheet's style is {style!r}, "
+                f"not {expected!r}")
         widths[report.family] = plan._drawer.text_width("SBD 1201", 2.5)
 
-    if len(set(round(w, 3) for w in widths.values())) < 2:
+    if len(widths) > 1 and len({round(w, 3) for w in widths.values()}) < 2:
         errors.append(
             "every font measured the same width, so the layout is not being "
             "measured with the chosen face")
@@ -128,11 +127,13 @@ def check_the_sheet_uses_it():
 def main():
     failures = 0
     for name, fn in (
-        ("every choice resolves", check_every_choice_resolves),
-        ("an installed family is used", check_installed_families_are_used),
-        ("choices stay distinct", check_choices_stay_distinct),
+        ("only installed fonts are offered", check_only_installed_fonts_are_offered),
+        ("an offered family is drawn as itself", check_an_offered_family_is_drawn_as_itself),
+        ("no two entries draw the same face", check_no_two_entries_draw_the_same_face),
+        ("the default is installed", check_the_default_is_installed),
         ("a missing font is substituted", check_a_missing_font_is_substituted),
-        ("the sheet is drawn and measured with it", check_the_sheet_uses_it),
+        ("the sheet is drawn and measured with it",
+         check_the_sheet_is_drawn_and_measured_with_it),
     ):
         print(f"== {name} ==")
         errors = fn()
@@ -142,6 +143,8 @@ def main():
         if not errors:
             print("  OK")
 
+    print(f"\n{failures} failure(s)" if failures
+          else f"\nall font checks pass ({len(plan_fonts.supported())} fonts offered here)")
     sys.exit(1 if failures else 0)
 
 
