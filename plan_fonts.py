@@ -191,11 +191,36 @@ def _choice(family: str) -> Optional[FontChoice]:
     return None
 
 
+#: Families already reported as missing, so a busy worker says it once.
+_reported = set()
+
+
+def _report_once(family: str, message: str, *args) -> None:
+    """Say a font is missing the first time, then stop.
+
+    Whether a font is installed is a fact about the machine, not about the
+    request, so it does not change between plans -- but it was being logged
+    twice for every sheet drawn. Twice because a plan that has to be zoomed
+    out to fit its paper rebuilds its drawer at the new scale, and each build
+    sets the text style up again. Repeating a fixed fact once per drawer build
+    buries the lines that are about the request.
+    """
+    if family in _reported:
+        return
+    _reported.add(family)
+    logger.warning(message, *args)
+
+
 def resolve(family: str) -> str:
     """The font file to draw ``family`` with on this machine.
 
     Never raises and never returns nothing: a plan is still worth drawing in
     the wrong face, and the caller has no better answer than this one.
+
+    Reaching a substitute means the plan is asking for a font this machine
+    does not have -- normally one saved before the menu was narrowed to the
+    fonts the machine can honour, since nothing offered today needs standing
+    in for.
     """
     filename = _installed(family)
     if filename:
@@ -205,16 +230,21 @@ def resolve(family: str) -> str:
     for substitute in (choice.substitutes if choice else ()):
         filename = _installed(substitute)
         if filename:
-            logger.warning(
-                "font %r is not installed; drawing with %r instead",
+            _report_once(
+                family,
+                "font %r is not installed here, so plans asking for it are "
+                "drawn with %r instead. Pick a font from /fonts to choose for "
+                "yourself; this is reported once per worker.",
                 family, substitute,
             )
             return filename
 
     fallback = fonts.font_manager.fallback_font_name()
-    logger.warning(
-        "font %r is not installed and none of its substitutes are either; "
-        "drawing with the fallback %r",
+    _report_once(
+        family,
+        "font %r is not installed here and neither is any of its substitutes, "
+        "so plans asking for it are drawn with the fallback %r. Reported once "
+        "per worker.",
         family, fallback,
     )
     return fallback

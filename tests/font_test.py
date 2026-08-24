@@ -98,6 +98,43 @@ def check_a_missing_font_is_substituted():
     return []
 
 
+def check_a_substitution_is_reported_once():
+    """A missing font is reported once per worker, not once per sheet.
+
+    Whether a font is installed is a fact about the machine, so it does not
+    change between requests -- but it was logged twice for every plan drawn.
+    Twice because a plan too big for its paper is rebuilt at the scale that
+    fits, and each rebuild sets the text style up again. Repeating a fixed
+    fact per drawer build buries the lines that are about the request.
+    """
+    import logging
+
+    class Collector(logging.Handler):
+        def __init__(self):
+            super().__init__()
+            self.lines = []
+
+        def emit(self, record):
+            self.lines.append(record.getMessage())
+
+    collector = Collector()
+    logger = logging.getLogger("plan_fonts")
+    logger.addHandler(collector)
+    remembered = set(plan_fonts._reported)
+    try:
+        plan_fonts._reported.clear()
+        for _ in range(6):
+            plan_fonts.resolve("No Such Family At All")
+    finally:
+        logger.removeHandler(collector)
+        plan_fonts._reported.clear()
+        plan_fonts._reported.update(remembered)
+
+    if len(collector.lines) != 1:
+        return [f"six resolutions logged {len(collector.lines)} lines, not one"]
+    return []
+
+
 def check_the_sheet_is_drawn_and_measured_with_it():
     """The resolved file reaches the drawing, and the layout is measured with
     it -- text widths decide the sheet before anything is drawn."""
@@ -132,6 +169,7 @@ def main():
         ("no two entries draw the same face", check_no_two_entries_draw_the_same_face),
         ("the default is installed", check_the_default_is_installed),
         ("a missing font is substituted", check_a_missing_font_is_substituted),
+        ("a substitution is reported once", check_a_substitution_is_reported_once),
         ("the sheet is drawn and measured with it",
          check_the_sheet_is_drawn_and_measured_with_it),
     ):
