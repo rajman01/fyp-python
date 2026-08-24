@@ -224,9 +224,10 @@ class SurveyDXFManager:
         self.msp.add_lwpolyline(points, close=True, dxfattribs={"layer": "BUILDABLE"})
 
     def add_road_cl(self, points: List[Tuple[float, float]]):
+        # Deliberately not reserved: the road name belongs on its centreline,
+        # so treating the centreline as occupied would push every name off the
+        # road it names. The carriageway edges are reserved instead.
         points = [(x, y) for x, y, *_ in points]
-        if self.label_space is not None:
-            self.label_space.reserve_outline(points, closed=False)
         self.msp.add_lwpolyline(points, dxfattribs={"layer": "ROADS_CL"})
 
     def add_road(self, points: List[Tuple[float, float]]):

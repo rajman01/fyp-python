@@ -1045,6 +1045,15 @@ class BasePlan(PlanProps):
     # ------------------------------------------------------------------
     # Annotation placement
     # ------------------------------------------------------------------
+    #: Placement order, lowest first. What has to sit nearest the line it
+    #: annotates gets first claim on the sheet there; see
+    #: :meth:`_place_pending_labels` for why that beats placing the label with
+    #: the fewest options first.
+    LABEL_ORDER_BEARING: ClassVar[int] = 0
+    LABEL_ORDER_DISTANCE: ClassVar[int] = 1
+    LABEL_ORDER_ROAD_NAME: ClassVar[int] = 1
+    LABEL_ORDER_BEACON_ID: ClassVar[int] = 2
+
     #: Where a beacon id is tried, in order of preference: up and to the right
     #: first, which is where a surveyor expects to find it, then round the
     #: compass. Components are -1/0/1 rather than a unit vector so the offset
@@ -1053,11 +1062,25 @@ class BasePlan(PlanProps):
         (1, 1), (1, 0), (0, 1), (-1, 1), (1, -1), (-1, 0), (0, -1), (-1, -1),
     )
 
+    #: How far a crowded id may be pushed off its station, in multiples of
+    #: its own text height and on top of the clearance for the symbol. Every
+    #: direction is tried at one rung before any is tried at the next, so an
+    #: id only travels when all eight sides nearer in are taken -- and a
+    #: station where they are is one like the plan's origin, where the grid
+    #: values, the frame and two legs all arrive at once.
+    BEACON_LABEL_STEPS: ClassVar[tuple] = (0.0, 1.2, 2.4, 3.6)
+
     #: How far along a leg a label may slide, and how far off it may sit (in
     #: multiples of the base offset). Offsets are the outer loop: staying near
     #: the line the label belongs to matters more than staying at its middle.
     LEG_LABEL_SLIDES: ClassVar[tuple] = (0.5, 0.38, 0.62, 0.28, 0.72)
     LEG_LABEL_REACHES: ClassVar[tuple] = (1.0, 1.5, 2.1, 2.8)
+
+    def leg_label_offset(self) -> float:
+        """How far off its leg a bearing or distance sits, at the nearest of
+        the positions it will accept. Everything further out in
+        :attr:`LEG_LABEL_REACHES` is a multiple of this."""
+        return self._get_drawing_extent() * 0.02
 
     def _label_gap(self) -> float:
         """Clear sheet to keep around a label, so near-misses still read."""
@@ -1106,11 +1129,18 @@ class BasePlan(PlanProps):
     def _place_pending_labels(self) -> None:
         """Draw the queued annotation, each label at its best free position.
 
-        Beacon ids go down before leg labels. An id is pinned to its station
-        and has only the eight positions around it, while a leg label can
-        slide anywhere along its leg and swing to either side -- giving the
-        constrained one first refusal is what stops it being squeezed out by
-        something that had somewhere else to go.
+        Order is by what has to sit nearest the line, not by what has the
+        fewest options. A bearing belongs against the leg it measures and a
+        distance just inside it; that is how the sheet is read, and a bearing
+        pushed out beyond a station id to avoid it no longer reads as
+        belonging to any particular leg. So the leg labels claim the strip
+        along the line first and the id takes what is left.
+
+        The id can afford it. Its sixteen positions are all within about two
+        symbol widths of its own station, so being displaced moves it to
+        another side of the same beacon rather than adrift from it -- whereas
+        displacing a bearing moves it away from its leg, which is the only
+        thing that says which leg it belongs to.
         """
         for pending in sorted(self._pending_labels, key=lambda item: item.priority):
             index = self._labels.place(
@@ -1128,7 +1158,8 @@ class BasePlan(PlanProps):
 
         A station id is the only place its name appears on the drawing, so it
         is placed even where the sheet is crowded -- the eight positions are
-        tried in order and the least busy one wins.
+        tried in order and the least busy one wins. It is placed after the leg
+        labels, which have first claim on the strip along the line.
         """
         if height is None:
             height = self.height("beacon_label", self.label_size)
@@ -1147,16 +1178,16 @@ class BasePlan(PlanProps):
 
         width = self._drawer.text_width(label, height)
         options = []
-        for reach in (1.0, 1.9):
+        for push in (height * step for step in self.BEACON_LABEL_STEPS):
             for step_x, step_y in self.BEACON_LABEL_DIRECTIONS:
-                cx = x + step_x * (clear * reach / 2 + width / 2)
-                cy = y + step_y * (clear * reach / 2 + height)
+                cx = x + step_x * (clear / 2 + width / 2 + push)
+                cy = y + step_y * (clear / 2 + height + push)
                 options.append(_LabelOption(
                     self._label_box(label, cx, cy, height),
                     (lambda text=label, px=cx, py=cy, h=height:
                         self._drawer.add_label(text, px, py, height=h)),
                 ))
-        self.queue_label(priority=0, options=options, crowded_ok=True)
+        self.queue_label(self.LABEL_ORDER_BEACON_ID, options, crowded_ok=True)
 
     def add_leg_labels(self, leg: TraverseLegProps, orientation: str):
         """Queue a leg's distance (inside the polygon) and bearing (outside).
@@ -1184,7 +1215,7 @@ class BasePlan(PlanProps):
             (leg.to.easting, leg.to.northing),
             orientation,
         )
-        base_offset = self._get_drawing_extent() * 0.02
+        base_offset = self.leg_label_offset()
         normal_length = math.hypot(*inside) or 1.0
         inside = (inside[0] / normal_length, inside[1] / normal_length)
         outside = (outside[0] / normal_length, outside[1] / normal_length)
@@ -1206,8 +1237,8 @@ class BasePlan(PlanProps):
         if leg.distance is not None:
             text = f"{leg.distance:.2f}m"
             self.queue_label(
-                priority=1,
-                options=[
+                self.LABEL_ORDER_DISTANCE,
+                [
                     _LabelOption(
                         self._label_box(text, cx, cy, height, text_angle),
                         (lambda px=cx, py=cy: self._drawer.add_label(
@@ -1249,7 +1280,8 @@ class BasePlan(PlanProps):
             )
             for cx, cy in positions(outside, inside)
         ]
-        self.queue_label(priority=2, options=spread + tight, crowded_ok=crowded_ok)
+        self.queue_label(self.LABEL_ORDER_BEARING, spread + tight,
+                         crowded_ok=crowded_ok)
 
     def draw_tables(self):
         """Draw the enabled schedules in the band reserved for them.

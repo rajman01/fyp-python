@@ -45,7 +45,7 @@ from models.plan import (
     LayoutRoadProps,
     PlanType,
 )
-from plans.base import FOOTER_HEIGHT_PERCENT, BasePlan, TableSpec
+from plans.base import FOOTER_HEIGHT_PERCENT, BasePlan, TableSpec, _LabelOption
 from utils import polygon_orientation, readable_angle
 
 logger = logging.getLogger(__name__)
@@ -479,12 +479,24 @@ class LayoutPlan(BasePlan):
                         self._drawer.add_road(list(segment.coords))
 
             if road.name:
-                mid = centerline.interpolate(0.5, normalized=True)
                 (x1, y1), (x2, y2) = points[0], points[-1]
                 text_angle = readable_angle(math.degrees(math.atan2(y2 - y1, x2 - x1)))
                 height = min(self.height("general", self.label_size), road.width * 0.4)
-                self._drawer.add_label(road.name, mid.x, mid.y,
-                                       angle=text_angle, height=height)
+
+                # A road name can only slide along its own carriageway -- move
+                # it off and it names the wrong thing -- so the candidates run
+                # down the centreline from the middle outwards. Two roads that
+                # cross near their midpoints were both labelled there, one on
+                # top of the other.
+                options = []
+                for fraction in (0.5, 0.42, 0.58, 0.34, 0.66, 0.25, 0.75):
+                    at = centerline.interpolate(fraction, normalized=True)
+                    options.append(_LabelOption(
+                        self._label_box(road.name, at.x, at.y, height, text_angle),
+                        (lambda px=at.x, py=at.y: self._drawer.add_label(
+                            road.name, px, py, angle=text_angle, height=height)),
+                    ))
+                self.queue_label(self.LABEL_ORDER_ROAD_NAME, options, crowded_ok=True)
 
     def draw_plots(self):
         for plot in self.plots or []:

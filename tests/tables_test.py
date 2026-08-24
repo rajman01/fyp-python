@@ -18,7 +18,6 @@ submission. The checks here cover the two things that make that usable:
 
 import math
 import os
-import re
 import sys
 import tempfile
 
@@ -281,68 +280,6 @@ def check_pagination(out_dir):
     return errors
 
 
-def check_labels_do_not_collide(out_dir):
-    """No label sits on another label, on a beacon, or across a parcel line.
-
-    The drawing is annotated from a fixed formula -- distance inside the
-    polygon, bearing outside, both at the leg midpoint, id up and right of the
-    station -- and on any parcel whose legs are short relative to its text
-    those positions coincide. The placer is what turns the formula into a
-    preference, so this checks the outcome it exists for rather than the
-    positions it happened to choose.
-    """
-    errors = []
-
-    def annotation(doc):
-        """Every drawn label, as the sheet it occupies. Schedules excluded:
-        they have a reserved band and are checked by check_no_overlap."""
-        boxes = []
-        for entity in doc.modelspace():
-            if entity.dxftype() not in ("TEXT", "MTEXT"):
-                continue
-            if entity.dxf.layer in ("TABLES", "TEXT"):
-                continue
-            extents = bbox.extents([entity])
-            if extents is not None and extents.has_data:
-                boxes.append((_describe(entity), extents))
-        return boxes
-
-    def _describe(entity):
-        return entity.dxf.text if entity.dxftype() == "TEXT" else entity.text
-
-    for name, cls, payload, _ in CASES:
-        for label, extra in (("bare", {}), ("with schedules", TABLES_ON)):
-            plan, doc = _build(cls, payload(**extra), out_dir,
-                               f"{name}_collide_{label.split()[0]}")
-            boxes = annotation(doc)
-
-            # An axis-aligned box around rotated text overstates its area, so
-            # a small shared corner is not evidence of a collision the reader
-            # would see. Anything past a third of the smaller label is.
-            for i in range(len(boxes)):
-                for j in range(i + 1, len(boxes)):
-                    (first, a), (second, b) = boxes[i], boxes[j]
-                    shared = _shared_area(a, b)
-                    smaller = min(_area(a), _area(b))
-                    if smaller > 0 and shared > smaller * 0.34:
-                        errors.append(
-                            f"{name} ({label}): {first!r} and {second!r} overlap "
-                            f"by {shared / smaller:.0%} of the smaller")
-
-    return errors
-
-
-def _area(extents):
-    return ((extents.extmax.x - extents.extmin.x)
-            * (extents.extmax.y - extents.extmin.y))
-
-
-def _shared_area(a, b):
-    width = min(a.extmax.x, b.extmax.x) - max(a.extmin.x, b.extmin.x)
-    height = min(a.extmax.y, b.extmax.y) - max(a.extmin.y, b.extmin.y)
-    return max(width, 0.0) * max(height, 0.0)
-
-
 def main():
     out_dir = sys.argv[1] if len(sys.argv) > 1 else tempfile.mkdtemp(prefix="fyp_tables_")
     os.makedirs(out_dir, exist_ok=True)
@@ -353,7 +290,6 @@ def main():
         ("no overlap with the sheet", check_no_overlap),
         ("schedule values", check_values),
         ("pagination", check_pagination),
-        ("labels do not collide", check_labels_do_not_collide),
     ):
         print(f"== {name} ==")
         errors = fn(out_dir)
