@@ -66,8 +66,12 @@ def origin_display_name(origin) -> str:
 #: The values come from the surveyor's reference ranges, quoted as model units
 #: at 1:500 (1 m at 1:500 prints at 2 mm):
 #:
-#:   * bearing/distance 1.0-1.3 m  -> 2.0-2.6 mm  (2.5 mm here)
-#:   * quoted coordinates 1.5-2 m  -> 3.0-4.0 mm  (3.5 mm here)
+#:   * bearing/distance 1.0-1.3 m  -> 2.0-2.6 mm  (2.0 mm here)
+#:   * quoted coordinates 1.5-2 m  -> 3.0-4.0 mm  (3.0 mm here)
+#:
+#: Both sit at the bottom of their range rather than the top: the annotation
+#: read heavy on a finished sheet. Reduced within the surveyor's own figures
+#: rather than below them, so the sheet is still one they specified.
 #:
 #: The remaining classes are anchored to those two: title text is the largest
 #: element on the sheet, the plan number reads at coordinate size, and the
@@ -81,16 +85,16 @@ TEXT_HEIGHTS_MM = {
     "title": 3.5,           # plan title, address, state, scale line
     "title_note": 3.5,      # area / origin / notes under the graphical scale
     "scale_bar": 1.8,       # graphical scale tick labels
-    "bearing_distance": 2.5,  # leg distance and bearing labels
-    "quoted_coordinate": 3.5,  # the mE / mN values quoted along the frame
-    "beacon_label": 2.5,    # beacon / station identifiers
+    "bearing_distance": 2.0,  # leg distance and bearing labels
+    "quoted_coordinate": 3.0,  # the mE / mN values quoted along the frame
+    "beacon_label": 2.0,    # beacon / station identifiers
     "plan_number": 3.5,     # PLAN No:- in the footer band
     "surveyor_name": 2.5,   # footer box text (surveyor's name, credits)
     "spot_height": 1.5,     # topographic spot elevations
     "contour_label": 1.8,   # contour value labels
     "grid_label": 2.0,      # reference-grid coordinate labels
     "table": 2.0,           # schedule / table cell text
-    "general": 2.5,         # anything not otherwise classified
+    "general": 2.0,         # anything not otherwise classified
 }
 
 #: Which of the app's four size controls governs each text class.
