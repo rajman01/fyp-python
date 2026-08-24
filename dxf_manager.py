@@ -24,6 +24,7 @@ import uuid
 import zipfile
 from datetime import datetime
 import label_placement
+import plan_fonts
 from typing import List, Optional, Tuple
 
 import ezdxf
@@ -160,7 +161,15 @@ class SurveyDXFManager:
         self.doc.layers.add(name="STATIONS", color=colors.BLUE, lineweight=13)
 
     def setup_font(self, font_name: str = "Times New Roman"):
-        self.doc.styles.add("SURVEY_TEXT", font=f"{font_name}.ttf")
+        """Set the style every text entity on the sheet is drawn in.
+
+        The style names a font *file*, not a family, and this used to build
+        that name by adding ".ttf" to the family the user picked. That is only
+        right where the family and the file happen to share a name: on the
+        container this service runs in it never does, so every choice resolved
+        to nothing and every plan came out in the same fallback face.
+        """
+        self.doc.styles.add("SURVEY_TEXT", font=plan_fonts.resolve(font_name))
 
     def setup_beacon_style(self, type_: str = "box", size: float = 1.0):
         block = self.doc.blocks.new(name="BEACON_POINT")

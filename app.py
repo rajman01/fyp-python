@@ -25,6 +25,7 @@ from pydantic import ValidationError
 from werkzeug.utils import secure_filename
 
 from cad_import import CadImportError, inspect_drawing
+import plan_fonts
 from point_stream import PointStreamError, read_plan_stream
 from progress import JobProgress
 from models.plan import STANDARD_SCALES
@@ -163,6 +164,33 @@ def generate_layout_plan():
 @app.post("/route/plan")
 def generate_route_plan():
     return generate_plan(RoutePlan, "Route")
+
+
+@app.get("/fonts")
+def list_fonts():
+    """The fonts a plan can be drawn in on *this* machine.
+
+    Which fonts exist is a property of the container, not of the app, and the
+    two had drifted: the dropdown offered five families and the image carries
+    none of them by name, so every choice was drawn in the same fallback face.
+    Reporting what is installed lets the app offer fonts that will actually be
+    honoured, and say so when one will be substituted.
+
+    ``drawn_as`` is what the sheet really gets -- the family itself when it is
+    installed, otherwise the metric-compatible stand-in that is.
+    """
+    return jsonify({
+        "default": plan_fonts.DEFAULT_FAMILY,
+        "fonts": [
+            {
+                "family": report.family,
+                "note": report.note,
+                "installed": report.installed,
+                "drawn_as": report.drawn_as or None,
+            }
+            for report in plan_fonts.supported()
+        ],
+    }), 200
 
 
 #: Plan types the scale endpoint answers for, by the same names the generate
