@@ -67,6 +67,20 @@ def readable_angle(angle: float, bias: float = READABILITY_BIAS) -> float:
     return angle
 
 
+def round_bearing_to_minute(degrees: int, minutes: int, seconds: float) -> tuple:
+    """Round a D-M-S bearing to the nearest whole minute.
+
+    Dropping the seconds outright always rounds down (91°17'49" -> 91°17'
+    instead of 91°18'), biasing every bearing drawn on the sheet. Carries
+    into minutes/degrees and wraps degrees at 360.
+    """
+    minutes = (minutes or 0) + (1 if (seconds or 0) >= 30 else 0)
+    degrees = (degrees or 0) + minutes // 60
+    minutes %= 60
+    degrees %= 360
+    return degrees, minutes
+
+
 def format_number(num, mode: str = "tenth") -> str:
     """Zero-pad a number to 2 ('tenth') or 3 ('hundredth') digits."""
     if mode == "tenth":

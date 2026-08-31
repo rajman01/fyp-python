@@ -33,7 +33,7 @@ from models.plan import (
     TraverseLegProps,
     origin_display_name,
 )
-from utils import format_number, html_to_mtext, line_normals, readable_angle
+from utils import format_number, html_to_mtext, line_normals, readable_angle, round_bearing_to_minute
 
 logger = logging.getLogger(__name__)
 
@@ -551,8 +551,11 @@ class BasePlan(PlanProps):
             if leg.bearing is None:
                 bearing = ""
             else:
-                degrees = format_number(leg.bearing.degrees, "hundredth")
-                minutes = format_number(leg.bearing.minutes, "tenth")
+                deg_val, min_val = round_bearing_to_minute(
+                    leg.bearing.degrees, leg.bearing.minutes, leg.bearing.seconds
+                )
+                degrees = format_number(deg_val, "hundredth")
+                minutes = format_number(min_val, "tenth")
                 bearing = f"{degrees}\u00b0 {minutes}'"
             distance = "" if leg.distance is None else f"{leg.distance:.{TABLE_DISTANCE_DECIMALS}f}"
             rows.append([line, bearing, distance])
@@ -1334,8 +1337,11 @@ class BasePlan(PlanProps):
         # thing on the drawing, so if no spread position is free the compact
         # form is offered next: a bearing that reads beats one that is
         # elegantly spaced across two other labels.
-        degrees_label = f"{format_number(leg.bearing.degrees, 'hundredth')}°"
-        minutes_label = f"{format_number(leg.bearing.minutes, 'tenth')}'"
+        deg_val, min_val = round_bearing_to_minute(
+            leg.bearing.degrees, leg.bearing.minutes, leg.bearing.seconds
+        )
+        degrees_label = f"{format_number(deg_val, 'hundredth')}°"
+        minutes_label = f"{format_number(min_val, 'tenth')}'"
         span = length * 0.6
 
         spread = [
