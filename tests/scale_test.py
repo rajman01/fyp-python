@@ -524,6 +524,42 @@ def check_scale_advice_matches_the_drawing(out_dir):
     return errors
 
 
+def check_generation_reports_actual_scale(out_dir):
+    """A caller can tell when the engine replaced the requested scale."""
+    from app import app, generate_plan
+
+    class AdjustedPlan:
+        true_scale = True
+        scale = 2000
+        scale_adjusted_from = 1250
+        name = "adjusted-scale"
+
+        def __init__(self, **kwargs):
+            pass
+
+        def draw(self):
+            pass
+
+        def save(self):
+            return "plans/adjusted-scale.zip"
+
+    with app.test_request_context("/cadastral/plan", method="POST", json={}):
+        response, status = generate_plan(AdjustedPlan, "Cadastral")
+
+    body = response.get_json()
+    errors = []
+    if status != 200:
+        errors.append(f"generation returned {status}")
+    if body.get("scale") != 2000:
+        errors.append(f"actual scale is {body.get('scale')}, expected 2000")
+    if body.get("scale_adjusted_from") != 1250:
+        errors.append(
+            "requested scale is "
+            f"{body.get('scale_adjusted_from')}, expected 1250"
+        )
+    return errors
+
+
 def main():
     out_dir = sys.argv[1] if len(sys.argv) > 1 else tempfile.mkdtemp(prefix="fyp_scale_")
     os.makedirs(out_dir, exist_ok=True)
@@ -542,6 +578,7 @@ def main():
         ("scale auto-fit", check_scale_autofit),
         ("sheet frame is the paper", check_sheet_frame),
         ("scale advice matches the drawing", check_scale_advice_matches_the_drawing),
+        ("generation reports its actual scale", check_generation_reports_actual_scale),
     ):
         print(f"== {name} ==")
         errors = fn(out_dir)

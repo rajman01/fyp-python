@@ -159,6 +159,13 @@ def generate_plan(plan_cls, plan_label: str):
         # The object key. The archive is private, so there is no link to hand
         # back -- the API signs one for the plan's owner on request.
         "key": key,
+        # The engine is the authority on the scale actually drawn. A plan may
+        # have been zoomed out to fit its sheet, so returning only the file
+        # left callers unable to tell the user that their choice changed.
+        "scale": plan.scale if plan.true_scale else None,
+        "scale_adjusted_from": (
+            plan.scale_adjusted_from if plan.true_scale else None
+        ),
     }), 200
 
 
