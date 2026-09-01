@@ -2,7 +2,7 @@
 
 ``BasePlan`` owns everything that is common to every plan type: computing
 the drawing frame from the data bounding box, and drawing the frame, title
-block, footer boxes, north arrow, and bearing/distance leg labels.
+block, footer boxes, north arrow, and bearing/distance leg labels..
 """
 
 import logging
